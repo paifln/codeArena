@@ -1,0 +1,73 @@
+services:
+  sandbox-image:
+    image: codearena-sandbox:local
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    entrypoint: ["/bin/true"]
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  api:
+    image: codearena-api:3
+    build:
+      context: .
+      target: api
+    ports:
+      - "${BIND_HOST:-0.0.0.0}:${PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: sqlite:////data/codearena-v3.db
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      RUN_COOLDOWN_SECONDS: ${RUN_COOLDOWN_SECONDS:-2}
+      SUBMIT_COOLDOWN_SECONDS: ${SUBMIT_COOLDOWN_SECONDS:-5}
+      MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-200}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+    volumes:
+      - arena-data:/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp:size=32m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    image: codearena-worker:3
+    build:
+      context: .
+      target: worker
+    environment:
+      DATABASE_URL: sqlite:////data/codearena-v3.db
+      SANDBOX_IMAGE: codearena-sandbox:local
+    group_add:
+      - "${DOCKER_GID:-0}"
+    volumes:
+      - arena-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      api:
+        condition: service_healthy
+      sandbox-image:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp:size=64m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import time; from app.db import SessionLocal; from app.models import SystemSetting; d=SessionLocal(); r=d.get(SystemSetting,'judge_heartbeat'); assert r and r.value.get('available') and time.time()-r.value['time']<20; d.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  arena-data:

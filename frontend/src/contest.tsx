@@ -1,0 +1,631 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  ArrowRight,
+  BookOpen,
+  Download,
+  Lock,
+  MessageSquare,
+  Send,
+  Terminal,
+  Trophy,
+} from "lucide-react";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Link, useParams } from "react-router-dom";
+import { Timer } from "./components/ContestTimer";
+import { Results } from "./components/SubmissionResults";
+
+import { api, downloadCSV, useSession } from "./api";
+import { useList } from "./pages";
+import {
+  Badge,
+  Button,
+  Empty,
+  ErrorBox,
+  Field,
+  Heading,
+  Loading,
+  Modal,
+  useAction,
+} from "./ui";
+import { useContestEvents } from "./useContestEvents";
+
+export function Contest() {
+  const { id } = useParams();
+  const connected = useContestEvents(id);
+  const { t } = useTranslation();
+  const q = useQueryClient();
+  const teacher = useSession((s) => s.user?.role) !== "STUDENT";
+  const contest = useQuery({
+    queryKey: ["contest", id],
+    queryFn: () => api(`/contests/${id}`),
+    refetchInterval: 5000,
+  });
+  const [tab, setTab] = useState("tasks");
+  const a = useAction();
+  const c = contest.data;
+  if (contest.isPending) return <Loading />;
+  if (!c) return <ErrorBox error={contest.error} />;
+  const control = (action: string) => {
+    if (action === "finish" && !confirm(t("confirmFinish"))) return;
+    a.execute(async () => {
+      await api(
+        `/contests/${id}/${action}`,
+        action === "extend" ? { minutes: 15 } : {},
+      );
+      q.invalidateQueries();
+    });
+  };
+  return (
+    <>
+      <Link className="back-link" to="/contests">
+        <ArrowLeft size={15} />
+        {t("contests")}
+      </Link>
+      <Heading title={c.title} subtitle={c.description}>
+        <Badge value={c.status} />
+        <Timer contest={c} />
+      </Heading>
+      {teacher && (
+        <div className="contest-controls">
+          <span className="muted">{t("TEACHER")}</span>
+          {(["DRAFT", "SCHEDULED"].includes(c.status)
+            ? ["start"]
+            : c.status === "RUNNING"
+              ? ["pause", "extend", "finish"]
+              : c.status === "PAUSED"
+                ? ["resume", "extend", "finish"]
+                : []
+          ).map((v) => (
+            <Button
+              key={v}
+              variant="secondary"
+              disabled={a.busy}
+              onClick={() => control(v)}
+            >
+              {t(v)}
+            </Button>
+          ))}
+          <Button
+            variant="secondary"
+            disabled={
+              a.busy || (!c.frozen && !["RUNNING", "PAUSED"].includes(c.status))
+            }
+            onClick={() => control(c.frozen ? "unfreeze" : "freeze")}
+          >
+            <Lock size={14} />
+            {t(c.frozen ? "unfreeze" : "freeze")}
+          </Button>
+        </div>
+      )}
+      <ErrorBox error={a.error} />
+      <div className="toolbar contest-tabs">
+        <div className="tabs">
+          {[
+            ["tasks", BookOpen],
+            ["submissions", Terminal],
+            ["standings", Trophy],
+            ["messages", MessageSquare],
+          ].map(([name, Icon]: any) => (
+            <button
+              key={name}
+              className={tab === name ? "selected" : ""}
+              onClick={() => setTab(name)}
+            >
+              <Icon size={16} />
+              {t(name)}
+            </button>
+          ))}
+        </div>
+        <span className="live-label">
+          <i style={{ background: connected ? undefined : "var(--warning)" }} />
+          {t(connected ? "live" : "reconnecting")}
+        </span>
+      </div>
+      {tab === "tasks" && (
+        <div className="card">
+          {c.problems?.length ? (
+            <div className="problem-list">
+              {c.problems.map((p: any, i: number) => (
+                <Link
+                  to={`/contests/${id}/problems/${p.id}`}
+                  className="problem-row"
+                  key={p.id}
+                >
+                  <span className="problem-letter">
+                    {p.letter || String.fromCharCode(65 + i)}
+                  </span>
+                  <div>
+                    <h3>{p.title}</h3>
+                    <span className="muted">Python 3</span>
+                  </div>
+                  {p.difficulty && <Badge value={p.difficulty} />}
+                  <ArrowRight size={18} />
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <Empty title={t("notStarted")} />
+          )}
+        </div>
+      )}
+      {tab === "submissions" && (
+        <>
+          {teacher && <Monitor id={id!} />}
+          <Submissions contestId={id} />
+        </>
+      )}
+      {tab === "standings" && <Standings id={id!} />}
+      {tab === "messages" && <Messages id={id!} teacher={teacher} />}
+    </>
+  );
+}
+function Monitor({ id }: { id: string }) {
+  const { t } = useTranslation();
+  const data = useQuery({
+    queryKey: ["monitor", id],
+    queryFn: () => api(`/contests/${id}/monitor`),
+    refetchInterval: 10000,
+  });
+  const [search, setSearch] = useState("");
+  return (
+    <section className="section-gap">
+      <Heading title={t("participants")} subtitle={t("heartbeatHint")} />
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={t("search")}
+        aria-label={t("search")}
+      />
+      <ErrorBox error={data.error} />
+      {data.data && (
+        <div className="card table-wrap section-gap">
+          <table>
+            <thead>
+              <tr>
+                <th>{t("name")}</th>
+                <th>{t("connection")}</th>
+                <th>{t("solved")}</th>
+                <th>{t("lastActivity")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.data.participants
+                .filter((u: any) =>
+                  `${u.name} ${u.username}`
+                    .toLowerCase()
+                    .includes(search.toLowerCase()),
+                )
+                .map((u: any) => (
+                  <tr key={u.id}>
+                    <td>
+                      {u.name}
+                      <small className="block muted">{u.username}</small>
+                    </td>
+                    <td>
+                      <span className={`badge ${u.online ? "success" : ""}`}>
+                        <span className="status-dot" />
+                        {t(u.online ? "online" : "away")}
+                      </span>
+                    </td>
+                    <td>
+                      {data.data.rows.find((r: any) => r.user_id === u.id)
+                        ?.solved ?? 0}
+                    </td>
+                    <td className="muted">
+                      {u.last_activity
+                        ? new Date(u.last_activity).toLocaleString()
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="section-gap" />
+    </section>
+  );
+}
+function Standings({ id }: { id: string }) {
+  const { t } = useTranslation();
+  const data = useQuery({
+    queryKey: ["standings", id],
+    queryFn: () => api(`/contests/${id}/scoreboard`),
+    refetchInterval: 5000,
+  });
+  if (data.isPending) return <Loading />;
+  const s = data.data;
+  return (
+    <>
+      <ErrorBox error={data.error} />
+      {s && (
+        <>
+          {s.frozen && (
+            <div className="notice warning">
+              <Lock size={16} />
+              {t("frozen")}
+            </div>
+          )}
+          <div className="row standings-actions">
+            <Button
+              variant="secondary"
+              onClick={() =>
+                downloadCSV("standings.csv", [
+                  [
+                    t("name"),
+                    t("solved"),
+                    t("penalty"),
+                    ...s.problems.map((p: any) => p.letter),
+                  ],
+                  ...s.rows.map((r: any) => [
+                    r.name,
+                    r.solved,
+                    r.penalty,
+                    ...r.cells.map((c: any) =>
+                      c.solved
+                        ? `+${c.attempts} (${c.minutes})`
+                        : c.attempts
+                          ? `-${c.attempts}`
+                          : "",
+                    ),
+                  ]),
+                ])
+              }
+            >
+              <Download size={15} />
+              {t("download")}
+            </Button>
+            <Button variant="secondary" onClick={() => window.print()}>
+              {t("print")}
+            </Button>
+          </div>
+          <div className="card table-wrap">
+            <table className="scoreboard">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>{t("participants")}</th>
+                  <th>{t("solved")}</th>
+                  <th>{t("penalty")}</th>
+                  {s.problems.map((p: any) => (
+                    <th key={p.id} title={p.title}>
+                      {p.letter}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {s.rows.map((r: any, i: number) => (
+                  <tr key={r.user_id}>
+                    <td>
+                      <span className={`rank rank-${i + 1}`}>{i + 1}</span>
+                    </td>
+                    <td>
+                      <strong>{r.name}</strong>
+                    </td>
+                    <td className="mono">{r.solved}</td>
+                    <td className="mono muted">{r.penalty}</td>
+                    {r.cells.map((c: any) => (
+                      <td key={c.problem_id}>
+                        <span
+                          className={`score-cell ${c.solved ? "solved" : c.attempts ? "attempted" : ""}`}
+                        >
+                          {c.solved
+                            ? `+${c.attempts > 0 ? c.attempts : ""}`
+                            : c.attempts
+                              ? `−${c.attempts}`
+                              : "·"}
+                          {c.solved && <small>{c.minutes}</small>}
+                        </span>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!s.rows.length && <Empty title={t("noResults")} />}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+export function Submissions({ contestId }: { contestId?: string }) {
+  const { t } = useTranslation();
+  const teacher = useSession((s) => s.user?.role) !== "STUDENT";
+  const list = useList(
+    "/submissions" + (contestId ? `?contest_id=${contestId}` : ""),
+  );
+  const [selected, setSelected] = useState<number | null>(null);
+  const [filter, setFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const detail = useQuery({
+    queryKey: ["submission", selected],
+    queryFn: () => api(`/submissions/${selected}`),
+    enabled: selected !== null,
+    refetchInterval: (q) =>
+      ["QUEUED", "RUNNING"].includes(q.state.data?.status) ? 1500 : false,
+  });
+  const a = useAction();
+  const qc = useQueryClient();
+  return (
+    <>
+      {!contestId && <Heading title={t("submissions")} subtitle={t("live")} />}
+      <div className="toolbar">
+        <input
+          className="submission-search"
+          placeholder={t("search")}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select
+          aria-label={t("filter")}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        >
+          <option value="">{t("all")}</option>
+          {[
+            "QUEUED",
+            "RUNNING",
+            "ACCEPTED",
+            "WRONG_ANSWER",
+            "TIME_LIMIT_EXCEEDED",
+            "MEMORY_LIMIT_EXCEEDED",
+            "RUNTIME_ERROR",
+            "COMPILATION_ERROR",
+            "SYSTEM_ERROR",
+            "OUTPUT_LIMIT_EXCEEDED",
+          ].map((v) => (
+            <option key={v} value={v}>
+              {t(v)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <ErrorBox error={list.error} />
+      <div className="card table-wrap">
+        {list.isPending ? (
+          <Loading />
+        ) : list.data?.length ? (
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                {teacher && <th>{t("participants")}</th>}
+                <th>{t("tasks")}</th>
+                <th>{t("result")}</th>
+                <th>{t("elapsed")}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {list.data
+                .filter(
+                  (s) =>
+                    (!filter || s.status === filter) &&
+                    `${s.problem_title || ""} ${s.user_name || ""}`
+                      .toLowerCase()
+                      .includes(search.toLowerCase()),
+                )
+                .map((s) => (
+                  <tr key={s.id}>
+                    <td className="mono muted">#{s.id}</td>
+                    {teacher && <td>{s.user_name || s.user_id}</td>}
+                    <td>
+                      <strong>{s.problem_title || `#${s.problem_id}`}</strong>
+                      <small className="block muted">
+                        {s.kind === "RUN" ? t("run") : "Python 3"}
+                      </small>
+                    </td>
+                    <td>
+                      <Badge value={s.status} />
+                    </td>
+                    <td className="mono">
+                      {s.time_ms != null ? `${s.time_ms} ms` : "—"}
+                    </td>
+                    <td>
+                      <Button variant="ghost" onClick={() => setSelected(s.id)}>
+                        {t("code")}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        ) : (
+          <Empty title={t("noActivity")} />
+        )}
+      </div>
+      <Modal
+        title={`${t("submissions")} #${selected}`}
+        open={selected !== null}
+        onClose={() => setSelected(null)}
+      >
+        {detail.isPending ? (
+          <Loading />
+        ) : (
+          <>
+            <ErrorBox error={detail.error} />
+            {detail.data && (
+              <>
+                <div className="row between">
+                  <Badge value={detail.data.status} />
+                  {teacher && (
+                    <Button
+                      variant="secondary"
+                      disabled={a.busy}
+                      onClick={() =>
+                        a.execute(async () => {
+                          await api(`/submissions/${selected}/rejudge`, {});
+                          qc.invalidateQueries();
+                        })
+                      }
+                    >
+                      {t("rejudge")}
+                    </Button>
+                  )}
+                </div>
+                <ErrorBox error={a.error} />
+                <pre className="source-preview">{detail.data.source}</pre>
+                <Results result={detail.data} />
+              </>
+            )}
+          </>
+        )}
+      </Modal>
+    </>
+  );
+}
+function Messages({ id, teacher }: { id: string; teacher: boolean }) {
+  const { t } = useTranslation();
+  const announcements = useList(`/contests/${id}/announcements`);
+  const clarifications = useList(`/contests/${id}/clarifications`);
+  const q = useQueryClient();
+  const a = useAction();
+  const [answer, setAnswer] = useState<any>(null);
+  return (
+    <div className="messages-grid">
+      <section>
+        <h2>{t("notifications")}</h2>
+        {teacher && (
+          <form
+            className="card message-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const form = e.currentTarget;
+              const f = new FormData(form);
+              a.execute(async () => {
+                await api(`/contests/${id}/announcements`, {
+                  message: f.get("message"),
+                  level: f.get("level"),
+                });
+                form.reset();
+                q.invalidateQueries();
+              });
+            }}
+          >
+            <Field label={t("announce")}>
+              <textarea name="message" required rows={3} />
+            </Field>
+            <div className="row between">
+              <select name="level">
+                <option>INFO</option>
+                <option>WARNING</option>
+                <option>IMPORTANT</option>
+              </select>
+              <Button disabled={a.busy}>
+                <Send size={15} />
+                {t("send")}
+              </Button>
+            </div>
+          </form>
+        )}
+        {announcements.data?.map((n) => (
+          <article className="card message-card" key={n.id}>
+            <span className="eyebrow">{n.level}</span>
+            <p>{n.message}</p>
+            <small className="muted">
+              {new Date(n.created_at).toLocaleString()}
+            </small>
+          </article>
+        ))}
+        {!announcements.data?.length && <Empty title={t("empty")} />}
+      </section>
+      <section>
+        <h2>{t("question")}</h2>
+        {!teacher && (
+          <form
+            className="card message-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const form = e.currentTarget;
+              const f = new FormData(form);
+              a.execute(async () => {
+                await api(`/contests/${id}/clarifications`, {
+                  question: f.get("question"),
+                });
+                form.reset();
+                q.invalidateQueries();
+              });
+            }}
+          >
+            <Field label={t("ask")}>
+              <textarea name="question" required rows={3} />
+            </Field>
+            <Button disabled={a.busy}>
+              <Send size={15} />
+              {t("send")}
+            </Button>
+          </form>
+        )}
+        {clarifications.data?.map((c) => (
+          <article className="card message-card" key={c.id}>
+            <strong>{c.user_name || t("question")}</strong>
+            <p>{c.question}</p>
+            {c.answer ? (
+              <div className="answer">
+                <strong>
+                  {t("answer")} {c.is_public && `· ${t("public")}`}
+                </strong>
+                <p>{c.answer}</p>
+              </div>
+            ) : (
+              <span className="muted">{t("unanswered")}</span>
+            )}
+            {teacher && (
+              <Button variant="ghost" onClick={() => setAnswer(c)}>
+                {t("answer")}
+              </Button>
+            )}
+          </article>
+        ))}
+        {!clarifications.data?.length && <Empty title={t("empty")} />}
+      </section>
+      <ErrorBox error={a.error} />
+      <Modal
+        title={t("answer")}
+        open={!!answer}
+        onClose={() => setAnswer(null)}
+      >
+        <p>{answer?.question}</p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const f = new FormData(e.currentTarget);
+            a.execute(async () => {
+              await api(
+                `/clarifications/${answer.id}`,
+                {
+                  answer: f.get("answer"),
+                  is_public: f.get("public") === "on",
+                },
+                "PATCH",
+              );
+              setAnswer(null);
+              q.invalidateQueries();
+            });
+          }}
+        >
+          <textarea
+            name="answer"
+            required
+            defaultValue={answer?.answer}
+            rows={4}
+          />
+          <label className="check-row">
+            <input
+              name="public"
+              type="checkbox"
+              defaultChecked={answer?.is_public}
+            />
+            {t("public")}
+          </label>
+          <Button disabled={a.busy}>{t("send")}</Button>
+          <ErrorBox error={a.error} />
+        </form>
+      </Modal>
+    </div>
+  );
+}
