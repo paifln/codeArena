@@ -79,11 +79,14 @@ def get_problem(
         if not contest_id:
             raise HTTPException(404, "Problem not found")
         c = access_contest(db, contest_id, user)
-        if contest_status(c) not in ("RUNNING", "PAUSED") or not db.get(
+        if contest_status(c) not in ("RUNNING", "PAUSED", "FINISHED") or not db.get(
             ContestProblem, (contest_id, pid)
         ):
             raise HTTPException(403, "Problem is unavailable")
-    return problem_public(db, p, privileged, language)
+    result = problem_public(db, p, privileged, language)
+    if not privileged and contest_status(c) == "FINISHED":
+        result["editorial"] = p.editorial
+    return result
 
 
 @router.patch("/problems/{pid}")
@@ -126,6 +129,7 @@ def export_problem(pid: int, user=Depends(teacher), db: DBSession = Depends(get_
                     "input": stem + ".in",
                     "output": stem + ".out",
                     "is_sample": t["is_sample"],
+                    "weight": t.get("weight", 1),
                 }
             )
         z.writestr("problem.json", json.dumps(manifest, ensure_ascii=False))
@@ -183,6 +187,7 @@ async def import_problem(
                     "input_data": z.read(t["input"]).decode("utf-8"),
                     "expected": z.read(t["output"]).decode("utf-8"),
                     "is_sample": t.get("is_sample", False),
+                    "weight": t.get("weight", 1),
                 }
                 for t in data["tests"]
             ]

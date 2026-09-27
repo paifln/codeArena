@@ -7,7 +7,7 @@
 - `backend/app/services/execution.py`: execution policy shared by REST, WebSocket and queue admission.
 - `backend/app/services/submission_queue.py`: transactional admission, deduplication, limits and problem snapshots.
 - `backend/app/services/serializers.py`: audience-specific representations and hidden-test filtering.
-- `backend/app/services/scoreboard.py`: ICPC standings and freeze visibility.
+- `backend/app/services/scoreboard.py`: ICPC/partial-credit ranking, shared places, team aggregation and freeze visibility.
 - `backend/app/services/judge_health.py`: heartbeat freshness and judge availability.
 - `backend/judge/`: leasing, recovery, comparison and isolated execution.
 - `frontend/src/features/solver/`: student workspace, execution notices, drafts and submission lifecycle.
@@ -38,8 +38,38 @@ Alembic owns persistent schema changes. Migration `0002` adds nullable request I
 
 ## Deployment and verification
 
-Use one API process, one worker and the shared SQLite WAL volume. Do not scale Compose replicas. Only the worker mounts the Docker socket. Fonts and editor resources are served locally after build.
+Use one API process, one worker process with 1-4 judging threads (default 2), a backup scheduler and the shared SQLite WAL volume. Do not scale Compose replicas. Only the worker mounts the Docker socket. Fonts and editor resources are served locally after build.
 
-Larger deployments need explicit distributed leasing, PostgreSQL migration, job delivery, per-institution authorization, observability and measured quotas. Replacing the queue alone does not provide tenant isolation.
+This deployment remains one API and one worker on SQLite WAL. Larger deployments need a separate design and measured quotas; changing the queue alone does not provide tenant isolation.
 
 Python tests exercise HTTP permissions, migrations, domain behavior and optional real Docker execution. Vitest exercises browser state with mocked editor/transport. Releases still need real-browser checks with Monaco, keyboard navigation and the intended network/proxy setup.
+
+
+## Version 3.1 boundaries
+
+Migration 0003 adds contest mode/scoring/practice settings, teams and fixed rosters,
+submission team snapshots/practice flags/points/feedback, editorials and test weights.
+Native column additions preserve submission test results; a migration test verifies
+existing history survives an upgrade.
+
+Team membership controls shared-submission access; the submitting user is retained.
+Official standings aggregate by captured team ID. Practice has a separate admission
+policy and is excluded from standings and official dashboard metrics. Editorials
+are absent from student responses until finish. Weighted snapshots are immutable;
+the engine calculates points and standings select the best official score.
+
+PythonRunner and CompiledRunner share the sandbox boundary. C++/Java compile once
+inside a container; bounded archives pass through the worker as opaque data and
+are unpacked only in fresh test containers. The API never gains execution privileges.
+The editor separates local drafts by language.
+
+app.operations owns backup, restore checks and rotation. Its service has no Docker
+socket. The admin operations endpoint reports queue/heartbeat/errors/disk/backup
+status without exposing source. See PERFORMANCE.md for the measured baseline.
+
+Migration 0004 separates educational scoring from individual/team participation,
+adds refresh-token revocation records and invalidates obsolete opaque sessions.
+config.py validates deployment settings; middleware/ owns rate limiting and JSON
+events. JWT session families remain checked in SQLite on every authenticated
+request so password resets take effect immediately. See SECURITY.md for exact
+policies and compatibility notes.

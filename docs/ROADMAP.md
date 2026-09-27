@@ -1,6 +1,6 @@
 # School and university launch roadmap
 
-This is proposed work, not a claim of current certification or production capacity. Begin with a supervised classroom pilot.
+Version 3.1 includes teams, educational mode, weighted points, C++/Java, practice, editorials, feedback, operations monitoring and verified local backups. See PERFORMANCE.md for the 30-student baseline. Remaining work is listed below; this is not a certification or capacity claim.
 
 ## P0: before the first real assessment
 
@@ -17,18 +17,18 @@ This is proposed work, not a claim of current certification or production capaci
 ## P1: routine teaching
 
 - Invitation/account recovery flows, password change on first login, validated roster import and offboarding. Add a visible clear-drafts action for shared devices.
-- Courses/terms, reusable assignments, practice mode outside contests, deadlines, grading exports and teacher feedback.
-- Metrics and alerts: queue depth/age, worker heartbeat, infrastructure errors, disk space and backup age. Avoid logging passwords or source.
+- Courses/terms, reusable assignments, standalone practice collections, deadlines and richer gradebook exports.
+- Extend existing operations monitoring with retained metrics, external alert delivery and service targets. Avoid logging passwords or source.
 - Automated encrypted off-host backups and scheduled restoration checks with an accountable operator.
 - Institutional SSO and LMS integration. Evaluate [LTI 1.3 / LTI Advantage](https://www.imsglobal.org/lti-advantage-overview) for assignment launch and membership/grade exchange; prototype with the actual institutional LMS.
 - Real-browser regression tests with Monaco, multiple accounts, expired sessions, teacher resume and unreliable networks.
 
 ## P2: expand after measured demand
 
-- PostgreSQL and multiple isolated workers with explicit leases, quotas, retry budgets and load tests.
+- Repeat capacity tests and tune bounded slots/quotas within the single-worker SQLite deployment.
 - Institution/course ownership enforced throughout queries and exports before multi-institution hosting.
-- C++/Java/JavaScript through versioned sandbox images and language-specific resource/compilation tests.
-- Partial-credit scoring and subtasks alongside agreed grading rules and regression tests.
+- Additional runtime versions and JavaScript, with language-specific resource tests.
+- Dependency-based subtasks beyond existing weighted per-test scoring.
 - Code-similarity reports as teacher review aids, with evidence and student appeals; no automatic similarity penalties.
 
 ## Release gate

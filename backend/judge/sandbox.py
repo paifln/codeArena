@@ -20,11 +20,13 @@ class Execution:
     stderr: str = ''
     time_ms: int = 0
     memory_kb: int = 0  # Docker CLI cannot reliably measure peak RSS; never fabricate it.
+    artifact: str = ""
 
 
 class Sandbox(Protocol):
     def available(self) -> tuple[bool, str]: ...
-    def run(self, source: str, stdin: str, limits: Limits, *, compile_only: bool = False) -> Execution: ...
+    def run(self, source: str, stdin: str, limits: Limits, *, compile_only: bool = False,
+            language: str = "python3", artifact: str = "") -> Execution: ...
 
 
 class DockerSandbox:
@@ -56,16 +58,17 @@ class DockerSandbox:
         except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
             return False, 'Docker runtime is unavailable'
 
-    def create_args(self, name: str, limits: Limits):
+    def create_args(self, name: str, limits: Limits, language="python3"):
         return ['create', '--name', name, '--label', 'codearena.sandbox=true',
                 '--label', f'codearena.expires={int(time.time()) + 60}', '-i',
                 '--network', 'none', '--read-only', '--user', '10001:10001',
                 '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
                 '--memory', f'{limits.memory_mb}m', '--memory-swap', f'{limits.memory_mb}m',
-                '--cpus', '1', '--pids-limit', '16', '--log-driver', 'none',
+                '--cpus', '1', '--pids-limit', '32' if language == 'java17' else '16', '--log-driver', 'none',
                 '--ulimit', 'nofile=64:64', '--ulimit', 'core=0:0',
                 '--ulimit', f'cpu={math.ceil(limits.time_seconds)+1}:{math.ceil(limits.time_seconds)+1}',
                 '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777',
+                '--tmpfs', '/work:rw,exec,nosuid,nodev,size=32m,mode=1777',
                 '--entrypoint', 'python', self.image, '-I', '-B', '/opt/codearena/bootstrap.py']
 
     def cleanup_expired(self):
@@ -79,7 +82,7 @@ class DockerSandbox:
             if len(parts) == 2 and parts[1].isdigit() and int(parts[1]) < time.time():
                 self._command('rm', '-f', parts[0])
 
-    def run(self, source, stdin, limits, *, compile_only=False):
+    def run(self, source, stdin, limits, *, compile_only=False, language="python3", artifact=""):
         if len(source.encode()) > MAX_SOURCE_BYTES or len(stdin.encode()) > MAX_INPUT_BYTES:
             return Execution(Verdict.SYSTEM_ERROR, stderr='Execution input exceeds configured limits')
         name = f'codearena-{uuid.uuid4().hex}'
@@ -89,7 +92,7 @@ class DockerSandbox:
         threads = []
         started = time.monotonic()
         try:
-            created = self._command(*self.create_args(name, limits))
+            created = self._command(*self.create_args(name, limits, language))
             if created.returncode:
                 return Execution(Verdict.SYSTEM_ERROR, stderr='Could not create isolated container')
             process = subprocess.Popen(['docker', 'start', '-a', '-i', name],
@@ -110,6 +113,7 @@ class DockerSandbox:
                 thread.start()
                 threads.append(thread)
             payload = json.dumps({'source': source, 'input': stdin,
+                                  'language': language, 'artifact': artifact, 'memory_mb': limits.memory_mb,
                                   'mode': 'compile' if compile_only else 'execute'}).encode()
             # Feed on a separate thread: a broken runtime must not block the lease forever.
             def feed():
@@ -151,8 +155,10 @@ class DockerSandbox:
                         verdict = Verdict.TIME_LIMIT_EXCEEDED
                     else:
                         verdict = Verdict.COMPILATION_ERROR if compile_only else Verdict.RUNTIME_ERROR
-            return Execution(verdict, buffers[0].decode('utf-8', 'replace'),
-                             buffers[1].decode('utf-8', 'replace'), int((time.monotonic()-started)*1000))
+            output = buffers[0].decode('utf-8', 'replace')
+            compiled = output if compile_only and language != 'python3' and verdict == Verdict.ACCEPTED else ''
+            return Execution(verdict, '' if compiled else output,
+                             buffers[1].decode('utf-8', 'replace'), int((time.monotonic()-started)*1000), artifact=compiled)
         except (OSError, ValueError, subprocess.TimeoutExpired):
             return Execution(Verdict.SYSTEM_ERROR, stderr='Isolated runtime failed; retry when judge is healthy')
         finally:

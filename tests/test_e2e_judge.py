@@ -7,6 +7,8 @@ pytestmark = pytest.mark.skipif(os.environ.get('RUN_SANDBOX_TESTS') != '1', reas
 
 
 def test_complete_contest_with_real_docker(tmp_path, monkeypatch):
+    from app.middleware.limits import limiter
+    limiter.reset()
     from fastapi.testclient import TestClient
     from sqlalchemy import create_engine, event
     from sqlalchemy.orm import sessionmaker

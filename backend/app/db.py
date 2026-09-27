@@ -4,6 +4,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/codearena-v3.db")
+if not DATABASE_URL.startswith("sqlite:///"):
+    raise RuntimeError("This deployment requires SQLite WAL")
 if DATABASE_URL.startswith("sqlite:///"):
     Path(DATABASE_URL.removeprefix("sqlite:///")).parent.mkdir(
         parents=True, exist_ok=True

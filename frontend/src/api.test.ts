@@ -2,10 +2,30 @@
 import { api, useSession } from "./api";
 import { queryClient } from "./lib/queryClient";
 afterEach(() => {
+  document.cookie = "ca_csrf=; Max-Age=0; path=/";
   vi.unstubAllGlobals();
   vi.useRealTimers();
   queryClient.clear();
   useSession.getState().setUser(null);
+});
+it("rotates an expired session once and retries the original request", async () => {
+  document.cookie = "ca_csrf=test-csrf; path=/";
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+    .mockResolvedValueOnce(new Response('{"ok":true}'))
+    .mockResolvedValueOnce(new Response('{"id":7}'));
+  vi.stubGlobal("fetch", fetcher);
+  await expect(api("/auth/me")).resolves.toEqual({id:7});
+  expect(fetcher.mock.calls[1][0]).toBe("/api/v1/auth/refresh");
+  expect(fetcher.mock.calls[1][1].headers["X-CSRF-Token"]).toBe("test-csrf");
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});
+it("does not refresh rejected login credentials", async () => {
+  document.cookie = "ca_csrf=test-csrf; path=/";
+  const fetcher = vi.fn().mockResolvedValue(new Response('{"detail":"Invalid login"}', {status:401}));
+  vi.stubGlobal("fetch", fetcher);
+  await expect(api("/auth/login", {username:"wrong"})).rejects.toMatchObject({status:401});
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });
 it("terminates a hung request with a recoverable timeout", async () => {
   vi.useFakeTimers();
@@ -27,14 +47,12 @@ it("terminates a hung request with a recoverable timeout", async () => {
 it("preserves server error codes and retry delay", async () => {
   vi.stubGlobal(
     "fetch",
-    vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ detail: "CONTEST_PAUSED" }), {
-          status: 403,
-          headers: { "Retry-After": "5" },
-        }),
-      ),
+    vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "CONTEST_PAUSED" }), {
+        status: 403,
+        headers: { "Retry-After": "5" },
+      }),
+    ),
   );
   await expect(api("/submissions", {})).rejects.toMatchObject({
     code: "CONTEST_PAUSED",

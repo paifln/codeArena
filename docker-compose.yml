@@ -21,12 +21,14 @@ services:
     environment:
       DATABASE_URL: sqlite:////data/codearena-v3.db
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SECRET_KEY: ${SECRET_KEY:?Set a random 64-byte hex SECRET_KEY in .env}
       RUN_COOLDOWN_SECONDS: ${RUN_COOLDOWN_SECONDS:-2}
       SUBMIT_COOLDOWN_SECONDS: ${SUBMIT_COOLDOWN_SECONDS:-5}
       MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-200}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
     volumes:
       - arena-data:/data
+      - ./backups:/backups:ro
     restart: unless-stopped
     read_only: true
     tmpfs: [/tmp:size=32m]
@@ -47,6 +49,7 @@ services:
     environment:
       DATABASE_URL: sqlite:////data/codearena-v3.db
       SANDBOX_IMAGE: codearena-sandbox:local
+      JUDGE_CONCURRENCY: ${JUDGE_CONCURRENCY:-2}
     group_add:
       - "${DOCKER_GID:-0}"
     volumes:
@@ -68,6 +71,26 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  backup:
+    image: codearena-api:3
+    command: ["python", "-m", "app.operations"]
+    environment:
+      DATABASE_URL: sqlite:////data/codearena-v3.db
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+      BACKUP_KEEP: ${BACKUP_KEEP:-28}
+    volumes:
+      - arena-data:/data
+      - ./backups:/backups
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp:size=256m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
 volumes:
   arena-data:

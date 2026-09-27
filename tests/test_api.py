@@ -24,6 +24,8 @@ PASSWORD = 'Temporary-test-password-483'
 
 @pytest.fixture
 def arena(tmp_path, monkeypatch):
+    from app.middleware.limits import limiter
+    limiter.reset()
     engine = create_engine(f'sqlite:///{(tmp_path / "api.db").as_posix()}', connect_args={'check_same_thread': False, 'timeout': 10})
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
@@ -60,8 +62,8 @@ def arena(tmp_path, monkeypatch):
             db.commit()
             ids = {'contest': contest.id, 'problem': problem.id, 'unrelated': unrelated.id, 'student': student.id}
         clients = {'admin': admin}
-        for username in ('teacher','outsider','student','otherstudent'):
-            client = TestClient(app)
+        for index, username in enumerate(('teacher','outsider','student','otherstudent'), 1):
+            client = TestClient(app, client=(f'192.0.2.{index}', 50000))
             result = client.post(PREFIX+'/auth/login',json={'username':username,'password':PASSWORD})
             assert result.status_code == 200, result.text
             client.headers['X-CSRF-Token'] = client.cookies['ca_csrf']
@@ -187,7 +189,7 @@ def test_zip_roundtrip_preserves_tests_and_tag_search(arena):
     assert export.status_code == 200
     imported = teacher.post(PREFIX+'/problems/import',files={'file':('problem.zip',export.content,'application/zip')})
     assert imported.status_code == 201, imported.text
-    assert imported.json()['tests'] == problem['tests']
+    assert imported.json()['tests'] == [{**t, 'weight': 1} for t in problem['tests']]
     assert imported.json()['tags'] == problem['tags']
     assert len(teacher.get(PREFIX+'/problems?tag=math&q=Roundtrip').json()) == 2
     assert teacher.get(PREFIX+'/problems?tag=absent').json() == []
@@ -289,3 +291,98 @@ def test_concurrent_idempotent_retry_and_conflict(arena):
     conflict = student.post(PREFIX+'/submissions', json={**body, 'source':'print(123)'})
     assert conflict.status_code == 409
     assert conflict.json()['detail'] == 'IDEMPOTENCY_CONFLICT'
+
+
+def test_student_password_reset_revokes_sessions_and_checks_owner(arena):
+    from app.models import AuditLog
+    clients, sessions, ids = arena
+    path = f"{PREFIX}/users/{ids['student']}/reset-password"
+    body = {'new_password': 'New-student-password-123'}
+    assert clients['outsider'].post(path, json=body).status_code == 404
+    assert clients['student'].post(path, json=body).status_code == 403
+    assert clients['teacher'].post(path, json={'new_password':'short'}).status_code == 422
+    assert clients['teacher'].post(path, json=body, headers={'X-CSRF-Token':''}).status_code == 403
+    assert clients['teacher'].post(path, json=body).status_code == 204
+    assert clients['student'].get(PREFIX+'/auth/me').status_code == 401
+    assert clients['student'].post(PREFIX+'/auth/login', json={'username':'student','password':PASSWORD}).status_code == 401
+    assert clients['student'].post(PREFIX+'/auth/login', json={'username':'student','password':body['new_password']}).status_code == 200
+    with sessions() as db:
+        assert body['new_password'] not in str([row.detail for row in db.scalars(select(AuditLog))])
+    # Even administrators cannot reset another administrator through this endpoint.
+    admin_id = clients['admin'].get(PREFIX+'/auth/me').json()['id']
+    assert clients['admin'].post(f'{PREFIX}/users/{admin_id}/reset-password', json=body).status_code == 404
+
+
+def test_delete_group_preserves_accounts_and_removes_contest_link(arena):
+    from app.models import Group, GroupMember, ContestGroup
+    clients, sessions, ids = arena
+    group = clients['teacher'].post(PREFIX+'/groups', json={'name':'Class A'}).json()
+    path = f"{PREFIX}/groups/{group['id']}"
+    assert clients['teacher'].post(path+'/members', json={'user_ids':[ids['student']]}).status_code == 200
+    with sessions() as db:
+        db.add(ContestGroup(group_id=group['id'], contest_id=ids['contest'])); db.commit()
+    assert clients['outsider'].delete(path).status_code == 404
+    assert clients['student'].delete(path).status_code == 403
+    assert clients['teacher'].delete(path).status_code == 204
+    with sessions() as db:
+        assert db.get(Group,group['id']) is None
+        assert db.get(User,ids['student']).active
+        assert db.get(GroupMember,(group['id'],ids['student'])) is None
+        assert db.get(ContestGroup,(ids['contest'],group['id'])) is None
+    assert clients['student'].get(PREFIX+'/auth/me').status_code == 200
+
+
+def test_delete_student_revokes_access_retains_submissions(arena):
+    from app.models import GroupMember
+    clients, sessions, ids = arena
+    sid = clients['student'].post(PREFIX+'/submissions',json=payload(ids)).json()['id']
+    path = f"{PREFIX}/users/{ids['student']}"
+    assert clients['outsider'].delete(path).status_code == 404
+    assert clients['student'].delete(path).status_code == 403
+    assert clients['admin'].delete(path).status_code == 204
+    assert clients['student'].get(PREFIX+'/auth/me').status_code == 401
+    assert clients['student'].post(PREFIX+'/auth/login',json={'username':'student','password':PASSWORD}).status_code == 401
+    assert ids['student'] not in [u['id'] for u in clients['teacher'].get(PREFIX+'/users').json()]
+    assert clients['teacher'].post(path+'/reset-password',json={'new_password':'New-password-123'}).status_code == 404
+    with sessions() as db:
+        assert not db.get(User,ids['student']).active
+        assert db.get(Submission,sid) is not None
+        assert not db.scalars(select(GroupMember).where(GroupMember.user_id==ids['student'])).all()
+        assert db.get(ContestParticipant,(ids['contest'],ids['student'])) is None
+
+
+def test_reset_cannot_race_login_with_previous_password(arena, monkeypatch):
+    import threading
+    import app.routes.auth as auth
+    clients, _, ids = arena
+    checking = threading.Event()
+    release = threading.Event()
+    resetting = threading.Event()
+    original = auth.verify_password
+    def slow_verify(password, hashed):
+        checking.set()
+        assert release.wait(5)
+        return original(password, hashed)
+    monkeypatch.setattr(auth, 'verify_password', slow_verify)
+    login_client = TestClient(app)
+    def reset():
+        resetting.set()
+        return clients['teacher'].post(f"{PREFIX}/users/{ids['student']}/reset-password",json={'new_password':'Replacement-password-123'})
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            login = pool.submit(login_client.post, PREFIX+'/auth/login',json={'username':'student','password':PASSWORD})
+            assert checking.wait(5)
+            changed = pool.submit(reset)
+            assert resetting.wait(5)
+            try:
+                from concurrent.futures import TimeoutError
+                with pytest.raises(TimeoutError):
+                    changed.result(timeout=0.2)
+            finally:
+                release.set()
+            assert login.result().status_code == 200
+            assert changed.result().status_code == 204
+        assert login_client.get(PREFIX+'/auth/me').status_code == 401
+    finally:
+        release.set()
+        login_client.close()

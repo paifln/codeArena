@@ -44,7 +44,7 @@ def dashboard(user=Depends(current_user), db: DBSession = Depends(get_db)):
     ]
     ids = [c.id for c in visible]
     query = select(Submission).where(
-        Submission.kind == "SUBMIT", Submission.contest_id.in_(ids)
+        Submission.kind == "SUBMIT", Submission.is_practice.is_(False), Submission.contest_id.in_(ids)
     )
     if user.role == "STUDENT":
         query = query.where(Submission.user_id == user.id)
@@ -80,7 +80,7 @@ def standings_csv(cid: int, user=Depends(teacher), db: DBSession = Depends(get_d
     data = scoreboard(db, c, user)
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["Rank", "Name", "Username", "Solved", "Penalty"])
+    writer.writerow(["Rank", "Name", "Username", "Solved", "Points" if c.scoring == "PARTIAL" else "Penalty"])
 
     def safe_cell(text):
         return "'" + text if text and text[0] in "=+-@\t\r" else text
@@ -92,7 +92,7 @@ def standings_csv(cid: int, user=Depends(teacher), db: DBSession = Depends(get_d
                 safe_cell(r["name"]),
                 safe_cell(r["username"]),
                 r["solved"],
-                r["penalty"],
+                r["score"] if c.scoring == "PARTIAL" else r["penalty"],
             ]
         )
     return Response(

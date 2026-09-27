@@ -5,7 +5,7 @@ process owns the SQLite queue. Conditional updates acquire a unique lease;
 results are persisted only while the same lease still owns `RUNNING`. A lease
 older than 300 seconds is queued again, at most three attempts before a
 non-penalized `SYSTEM_ERROR`. A teacher can explicitly rejudge that result.
-Run only one worker for the local SQLite deployment. The tests also verify that
+Run one worker process with JUDGE_CONCURRENCY set to 1-4 slots (default 2). The tests also verify that
 concurrent claim attempts cannot both acquire the same submission.
 
 Build `Dockerfile.sandbox` as `codearena-sandbox:local` (or set `SANDBOX_IMAGE`).
@@ -18,11 +18,17 @@ database every five seconds, including while a submission is being judged.
 
 Each compile check and each test gets a fresh container with the Docker default
 seccomp profile, all capabilities dropped, no-new-privileges, non-root UID,
-no network, read-only root, 16 MiB `/tmp`, 16 processes, one CPU, bounded
+no network, read-only root, 16 MiB noexec `/tmp`, 32 MiB executable `/work`,
+16 processes (32 for Java), one CPU, bounded
 memory with swap disabled, 64 file descriptors and 1 MiB file size limit.
 There are no host mounts, inherited service environment variables or secrets.
 The source and test input travel through stdin; no expected answers enter the
-container. The compile stage checks Python syntax without executing source.
+container. Python compilation checks syntax without executing source.
+C++20 uses GCC 12; Java uses OpenJDK 17. Compilation has a 10-second/512-MB
+budget. Bounded artifacts are passed as base64 ZIP data to fresh test containers
+and never executed by the worker. Paths and expansion size are checked. Java JVM
+overhead counts toward the memory limit. Compiler failures are non-penalized CE;
+infrastructure errors remain SYSTEM_ERROR.
 Execution uses normal Python `__main__` semantics. After each invocation the
 worker force-removes the container. A background collector removes expired
 containers left behind by a worker crash.
@@ -36,7 +42,9 @@ while cgroup memory is enforced and an OOM kill maps to `MEMORY_LIMIT_EXCEEDED`.
 Submission work has a 120-second total budget; exhausting the infrastructure
 budget is `SYSTEM_ERROR` and must not penalize the student.
 
-ICPC judging stops at the first failure. Run uses only samples, or the supplied
+ICPC judging stops at the first failure; compilation errors are not penalized.
+Partial credit checks all tests and computes weighted points. Practice never
+changes official standings. Run uses only samples, or the supplied
 custom input with no expected-output comparison. The comparator normalizes
 CRLF/CR to LF, strips trailing spaces/tabs on each line and ignores final empty
 lines. Leading whitespace, internal spaces and internal empty lines matter.

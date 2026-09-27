@@ -26,3 +26,22 @@ class PythonRunner:
 
     def cleanup(self):
         self.source = ''
+
+
+class CompiledRunner(PythonRunner):
+    def __init__(self, sandbox, language):
+        super().__init__(sandbox)
+        self.language = language
+        self.artifact = ""
+
+    def compile(self):
+        result = self.sandbox.run(self.source, "", Limits(10, 512), compile_only=True, language=self.language)
+        self.artifact = result.artifact
+        return result
+
+    def execute(self, stdin, limits):
+        return self.sandbox.run("", stdin, limits, language=self.language, artifact=self.artifact)
+
+    def cleanup(self):
+        super().cleanup()
+        self.artifact = ""

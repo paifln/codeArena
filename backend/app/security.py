@@ -1,62 +1,84 @@
-import hashlib
-import os
 import secrets
 import time
+import bcrypt
+import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from fastapi import Depends, HTTPException, Request, Response
 from .db import SessionLocal
-from .models import User, Session, RateLimit
+from .models import User, Session, RateLimit, RefreshToken
+from .config import settings
 
 hasher = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1)
-DUMMY_HASH = hasher.hash(secrets.token_urlsafe(32))
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+DUMMY_HASH = bcrypt.hashpw(secrets.token_bytes(32), bcrypt.gensalt(rounds=12)).decode()
 
 
 def hash_password(password):
-    return hasher.hash(password)
+    if len(password.encode()) > 72:
+        raise HTTPException(422, "Password must not exceed 72 UTF-8 bytes")
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
 
 
 def verify_password(password, hashed):
     try:
+        if hashed.startswith("$2"):
+            return bcrypt.checkpw(password.encode(), hashed.encode())
         return hasher.verify(hashed, password)
-    except (VerificationError, InvalidHashError):
+    except (VerificationError, InvalidHashError, ValueError):
         return False
 
 
 def session_id(raw):
-    return hashlib.sha256(raw.encode()).hexdigest()
+    try:
+        return decode_token(raw, "access")["sid"]
+    except HTTPException:
+        return ""
+
+
+def decode_token(raw, kind):
+    try:
+        claims = jwt.decode(raw, settings().secret_key.get_secret_value(),
+            algorithms=["HS256"], issuer="codearena", audience="codearena",
+            options={"require": ["exp", "iat", "sub", "jti", "sid", "type"]})
+        if claims["type"] != kind or not isinstance(claims["sid"], str):
+            raise jwt.InvalidTokenError()
+        return claims
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Authentication required") from None
+
+
+def issue_tokens(db, response, session):
+    now = int(time.time())
+    for kind, cookie, lifetime in (("access", "ca_session", 900), ("refresh", "ca_refresh", 604800)):
+        expires = min(now + lifetime, int(session.expires_at))
+        jti = secrets.token_hex(32)
+        token = jwt.encode({"sub": str(session.user_id), "sid": session.id,
+            "jti": jti, "iat": now, "exp": expires, "type": kind,
+            "iss": "codearena", "aud": "codearena"},
+            settings().secret_key.get_secret_value(), algorithm="HS256")
+        if kind == "refresh":
+            db.add(RefreshToken(id=jti, session_id=session.id, user_id=session.user_id,
+                expires_at=expires, revoked=False))
+        response.set_cookie(cookie, token, max_age=expires-now, httponly=True,
+            secure=settings().cookie_secure, samesite="strict", path="/")
+    response.set_cookie("ca_csrf", session.csrf, max_age=max(0, int(session.expires_at)-now),
+        httponly=False, secure=settings().cookie_secure, samesite="strict", path="/")
+
+
+def revoke_sessions(db, user_id):
+    from sqlalchemy import delete, update
+    db.execute(update(RefreshToken).where(RefreshToken.user_id == user_id).values(revoked=True))
+    db.execute(delete(Session).where(Session.user_id == user_id))
 
 
 def issue_session(db, response: Response, user):
-    raw = secrets.token_urlsafe(40)
-    csrf = secrets.token_urlsafe(32)
-    db.add(
-        Session(
-            id=session_id(raw),
-            user_id=user.id,
-            csrf=csrf,
-            expires_at=time.time() + 86400,
-        )
-    )
-    response.set_cookie(
-        "ca_session",
-        raw,
-        max_age=86400,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="strict",
-        path="/",
-    )
-    response.set_cookie(
-        "ca_csrf",
-        csrf,
-        max_age=86400,
-        httponly=False,
-        secure=COOKIE_SECURE,
-        samesite="strict",
-        path="/",
-    )
+    from sqlalchemy import delete
+    db.execute(delete(RefreshToken).where(RefreshToken.expires_at < time.time()))
+    db.execute(delete(Session).where(Session.expires_at < time.time()))
+    session = Session(id=secrets.token_hex(32), user_id=user.id,
+        csrf=secrets.token_urlsafe(32), expires_at=time.time()+604800)
+    db.add(session)
+    issue_tokens(db, response, session)
 
 
 def current_user(request: Request):

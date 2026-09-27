@@ -72,8 +72,7 @@ PROBLEMS = [
 ]
 
 
-def create_demo(db, author_id: int):
-    lock_write(db)
+def _create_demo(db, author_id: int, group_id=None, contest_id=None):
     owner = db.get(User, author_id)
     if not owner or owner.role not in ("ADMIN", "TEACHER") or not owner.active:
         raise ValueError("Choose an existing active administrator or teacher")
@@ -83,6 +82,8 @@ def create_demo(db, author_id: int):
 
     group = Group(name="Демо-группа · Первые шаги", author_id=owner.id)
     db.add(group)
+    if group_id is not None:
+        group.id = group_id
     db.flush()
     now = time.time()
     contest = Contest(
@@ -96,6 +97,8 @@ def create_demo(db, author_id: int):
         scoreboard_enabled=True,
     )
     db.add(contest)
+    if contest_id is not None:
+        contest.id = contest_id
     db.flush()
     db.add(ContestGroup(contest_id=contest.id, group_id=group.id))
     for ordinal, item in enumerate(PROBLEMS):
@@ -145,8 +148,14 @@ def create_demo(db, author_id: int):
             detail={"problems": 3, "group_id": group.id},
         )
     )
-    db.commit()
     return contest.id, True
+
+
+def create_demo(db, author_id: int):
+    lock_write(db)
+    result = _create_demo(db, author_id)
+    db.commit()
+    return result
 
 
 def main():

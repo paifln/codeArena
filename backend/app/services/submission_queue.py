@@ -1,11 +1,13 @@
 import os
 import time
+import hashlib
+from ..middleware.logging import event
 from fastapi import HTTPException
 from sqlalchemy import select, func
 from ..db import lock_write
 from ..models import Submission, ContestProblem, Problem, TestCase
 from ..security import throttle
-from .access import access_contest
+from .access import access_contest, team_id_for
 from .common import audit
 from .execution import execution_policy
 
@@ -29,10 +31,10 @@ def enqueue_submission(db, req, user):
                 "language",
                 "custom_input",
             )
-            if any(getattr(existing, key) != getattr(req, key) for key in fields):
+            if existing.is_practice != req.practice or any(getattr(existing, key) != getattr(req, key) for key in fields):
                 raise HTTPException(409, "IDEMPOTENCY_CONFLICT")
             return existing
-    policy = execution_policy(db, c)
+    policy = execution_policy(db, c, practice=req.practice)
     if not policy["allowed"]:
         raise HTTPException(
             503 if policy["reason"] == "JUDGE_UNAVAILABLE" else 403, policy["reason"]
@@ -46,7 +48,7 @@ def enqueue_submission(db, req, user):
         db,
         f"{req.kind}:{user.id}",
         1,
-        float(os.getenv(req.kind + "_COOLDOWN_SECONDS", "3")),
+        float(os.getenv(req.kind + "_COOLDOWN_SECONDS", "2" if req.kind == "RUN" else "5")),
     )
     pending = db.scalar(
         select(func.count())
@@ -68,12 +70,13 @@ def enqueue_submission(db, req, user):
         select(TestCase).where(TestCase.problem_id == p.id).order_by(TestCase.ordinal)
     ).all()
     selected = [
-        {"input_data": t.input_data, "expected": t.expected, "is_sample": t.is_sample}
+        {"input_data": t.input_data, "expected": t.expected, "is_sample": t.is_sample, "weight": t.weight}
         for t in tests
         if req.kind == "SUBMIT" or t.is_sample
     ]
     snapshot = {
         "tests": selected,
+        "scoring": c.scoring,
         "time_limit": p.time_limit,
         "mem_limit": p.mem_limit,
         "version": p.version,
@@ -81,6 +84,8 @@ def enqueue_submission(db, req, user):
     s = Submission(
         request_id=str(req.request_id) if req.request_id else None,
         user_id=user.id,
+        team_id=team_id_for(db, c.id, user.id),
+        is_practice=req.practice,
         contest_id=c.id,
         problem_id=p.id,
         source=req.source,
@@ -95,4 +100,6 @@ def enqueue_submission(db, req, user):
     db.flush()
     audit(db, user, "submission.created", s.id)
     db.commit()
+    event("queue.admitted", submission_id=s.id, kind=s.kind, language=s.language,
+          source_hash=hashlib.sha256(s.source.encode()).hexdigest())
     return s

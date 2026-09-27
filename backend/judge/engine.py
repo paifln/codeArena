@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass, field
 from .comparators import equivalent
-from .languages import PythonRunner
+from .languages import PythonRunner, CompiledRunner
 from .limits import Limits, MAX_TESTS, SUBMISSION_BUDGET_SECONDS
 from .sandbox import DockerSandbox
 from .verdicts import Verdict
@@ -14,11 +14,12 @@ class Judgement:
     time_ms: int = 0
     memory_kb: int = 0
     error: str = ''
+    score: float = 0
 
 
 def judge(source, language, snapshot, kind='SUBMIT', custom_input=None, sandbox=None):
     sandbox = sandbox or DockerSandbox()
-    if language != 'python3':
+    if language not in ('python3', 'cpp20', 'java17'):
         return Judgement(Verdict.SYSTEM_ERROR, error='Unsupported language')
     ready, detail = sandbox.available()
     if not ready:
@@ -31,14 +32,17 @@ def judge(source, language, snapshot, kind='SUBMIT', custom_input=None, sandbox=
                      if custom_input is not None else [test for test in tests if test.get('is_sample')])
         if not tests or len(tests) > MAX_TESTS:
             return Judgement(Verdict.SYSTEM_ERROR, error='No eligible tests or too many tests')
-        runner = PythonRunner(sandbox)
+        partial = kind == 'SUBMIT' and snapshot.get('scoring') == 'PARTIAL'
+        total_weight = sum(t.get('weight', 1) for t in tests)
+        earned = 0
+        runner = PythonRunner(sandbox) if language == 'python3' else CompiledRunner(sandbox, language)
         runner.prepare(source)
         started = time.monotonic()
         result = Judgement(Verdict.ACCEPTED)
         try:
             compilation = runner.compile()
             if compilation.verdict != Verdict.ACCEPTED:
-                return Judgement(compilation.verdict, error=compilation.stderr[:4096])
+                return Judgement(Verdict.SYSTEM_ERROR if compilation.verdict == Verdict.SYSTEM_ERROR else Verdict.COMPILATION_ERROR, error=compilation.stderr[:4096])
             for ordinal, test in enumerate(tests, 1):
                 if time.monotonic() - started + limits.time_seconds + 15 > SUBMISSION_BUDGET_SECONDS:
                     result.verdict = Verdict.SYSTEM_ERROR
@@ -54,9 +58,19 @@ def judge(source, language, snapshot, kind='SUBMIT', custom_input=None, sandbox=
                                      'is_sample': bool(test.get('is_sample'))})
                 result.time_ms = max(result.time_ms, execution.time_ms)
                 result.memory_kb = max(result.memory_kb, execution.memory_kb)
+                if verdict == Verdict.ACCEPTED:
+                    earned += test.get('weight', 1)
                 if verdict != Verdict.ACCEPTED:
                     result.verdict = verdict
-                    break
+                    if not partial or verdict == Verdict.SYSTEM_ERROR:
+                        break
+            if result.verdict != Verdict.SYSTEM_ERROR:
+                result.score = (round(100 * earned / total_weight, 2) if partial and total_weight
+                                else 100 if result.verdict == Verdict.ACCEPTED else 0)
+                if partial and 0 < result.score < 100:
+                    result.verdict = Verdict.PARTIAL
+                elif partial and result.score == 100:
+                    result.verdict = Verdict.ACCEPTED
             return result
         finally:
             runner.cleanup()

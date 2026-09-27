@@ -16,15 +16,7 @@ const Editor = lazy(() => import("../../CodeEditor"));
 
 import ReactMarkdown from "react-markdown";
 import { api, useSession } from "../../api";
-import {
-  Badge,
-  Button,
-  Empty,
-  ErrorBox,
-  Field,
-  Loading,
-  useAction,
-} from "../../ui";
+import { Badge, Button, ErrorBox, Field, Loading, useAction } from "../../ui";
 
 import { useContestEvents } from "../../useContestEvents";
 
@@ -32,18 +24,31 @@ import { Timer } from "../../components/ContestTimer";
 import { Results } from "../../components/SubmissionResults";
 export function Solver() {
   const { id, problemId } = useParams();
+  const [language, setLanguage] = useState("python3");
   const user = useSession((s) => s.user);
   return user ? (
-    <SolverWorkspace key={`${user.id}:${id}:${problemId}`} />
+    <SolverWorkspace
+      key={`${user.id}:${id}:${problemId}:${language}`}
+      language={language}
+      setLanguage={setLanguage}
+    />
   ) : null;
 }
 
-function SolverWorkspace() {
+function SolverWorkspace({
+  language,
+  setLanguage,
+}: {
+  language: string;
+  setLanguage: (value: string) => void;
+}) {
   const { id, problemId } = useParams();
   useContestEvents(id);
   const { t } = useTranslation();
   const user = useSession((s) => s.user)!;
-  const key = `ca_draft:${user.id}:${id}:${problemId}`;
+  const key =
+    `ca_draft:${user.id}:${id}:${problemId}` +
+    (language === "python3" ? "" : `:${language}`);
   const { code, setCode, saveState } = useDraft(key);
   const [custom, setCustom] = useState("");
   const [useCustom, setUseCustom] = useState(false);
@@ -59,7 +64,7 @@ function SolverWorkspace() {
     refetchInterval: 5000,
   });
   const problem = useQuery({
-    queryKey: ["problem", problemId, id],
+    queryKey: ["problem", problemId, id, contest.data?.status],
     queryFn: () =>
       api<ProblemDetail>(`/problems/${problemId}?contest_id=${id}`),
   });
@@ -82,14 +87,16 @@ function SolverWorkspace() {
     });
     return () => observer.disconnect();
   }, []);
+  const practice =
+    contest.data?.status === "FINISHED" && !!contest.data?.practice_enabled;
+  const execution = practice
+    ? contest.data?.practice_execution
+    : contest.data?.execution;
   const judging = ["QUEUED", "RUNNING"].includes(result.data?.status || "");
   const waiting =
     a.busy || judging || (submission !== null && result.isPending);
   const enabled =
-    !!contest.data?.execution.allowed &&
-    !contest.isError &&
-    !waiting &&
-    !!code.trim();
+    !!execution?.allowed && !contest.isError && !waiting && !!code.trim();
   const retry = useRef<{ signature: string; id: string } | null>(null);
   const submitting = useRef(false);
   const send = (kind: SubmissionKind) => {
@@ -101,6 +108,8 @@ function SolverWorkspace() {
           contest_id: Number(id),
           problem_id: Number(problemId),
           source: code,
+          language,
+          practice,
           kind,
           ...(kind === "RUN" && useCustom ? { custom_input: custom } : {}),
         };
@@ -130,16 +139,6 @@ function SolverWorkspace() {
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
   }, []);
-  if (contest.data?.status === "FINISHED" && user.role === "STUDENT")
-    return (
-      <div className="card">
-        <Empty title={t("FINISHED")} hint={t("ended")}>
-          <Link className="button" to={"/contests/" + id}>
-            {t("back")}
-          </Link>
-        </Empty>
-      </div>
-    );
   if (problem.isPending) return <Loading />;
   if (!problem.data) return <ErrorBox error={problem.error} />;
   const p = problem.data;
@@ -152,6 +151,7 @@ function SolverWorkspace() {
         </Link>
         {contest.data && <Timer contest={contest.data} />}
       </div>
+      {practice && <p className="notice success">{t("practiceHint")}</p>}
       <div className="solver-problems">
         {contest.data?.problems?.map((pr: any, i: number) => (
           <Link
@@ -164,7 +164,14 @@ function SolverWorkspace() {
         ))}
       </div>
       <ErrorBox error={contest.error} />
-      {contest.data && <ExecutionNotice contest={contest.data} />}
+      {contest.data && (
+        <ExecutionNotice
+          contest={{
+            ...contest.data,
+            execution: execution || contest.data.execution,
+          }}
+        />
+      )}
       <div
         className="solver-grid"
         style={{
@@ -182,6 +189,12 @@ function SolverWorkspace() {
               </span>
             </div>
           </div>
+          {p.editorial && (
+            <details className="markdown">
+              <summary>{t("editorial")}</summary>
+              <ReactMarkdown>{p.editorial}</ReactMarkdown>
+            </details>
+          )}
           <div className="markdown">
             <ReactMarkdown>{p.description}</ReactMarkdown>
             <h3>{t("input")}</h3>
@@ -238,14 +251,34 @@ function SolverWorkspace() {
         <section className="card editor-panel">
           <div className="editor-header">
             <span>
-              <Terminal size={16} /> main.py
+              <Terminal size={16} />{" "}
+              {language === "java17"
+                ? "Main.java"
+                : language === "cpp20"
+                  ? "main.cpp"
+                  : "main.py"}
             </span>
-            <span className="badge">Python 3</span>
+            <select
+              aria-label={t("languageVersion")}
+              value={language}
+              disabled={waiting}
+              onChange={(e) => setLanguage(e.target.value)}
+            >
+              <option value="python3">Python 3.12</option>
+              <option value="cpp20">C++20 (GCC 12)</option>
+              <option value="java17">Java 17</option>
+            </select>
           </div>
           <Suspense fallback={<Loading />}>
             <Editor
               height="420px"
-              language="python"
+              language={
+                language === "python3"
+                  ? "python"
+                  : language === "cpp20"
+                    ? "cpp"
+                    : "java"
+              }
               theme={dark ? "vs-dark" : "light"}
               value={code}
               onChange={(value) => setCode(value || "")}
@@ -287,6 +320,8 @@ function SolverWorkspace() {
             <span>UTF-8</span>
           </div>
           <div className="editor-console">
+            <p className="muted">{t("runNoPenalty")}</p>
+            {language === "java17" && <p className="muted">{t("javaHint")}</p>}
             <label className="check-row">
               <input
                 type="checkbox"
@@ -310,8 +345,8 @@ function SolverWorkspace() {
               {t(
                 waiting
                   ? "judgingHint"
-                  : !contest.data?.execution.allowed
-                    ? contest.data?.execution.reason || "executionLoading"
+                  : !execution?.allowed
+                    ? execution?.reason || "executionLoading"
                     : !code.trim()
                       ? "emptyCodeHint"
                       : "readyToSubmit",

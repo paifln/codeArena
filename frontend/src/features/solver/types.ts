@@ -12,6 +12,8 @@ export interface ContestDetail {
   server_time: string;
   paused_at: string | null;
   can_manage: boolean;
+  practice_enabled: boolean;
+  practice_execution: { allowed: boolean; reason: ExecutionReason | null };
   execution: { allowed: boolean; reason: ExecutionReason | null };
   problems: { id: number; title: string; letter: string }[];
 }
@@ -31,6 +33,7 @@ export interface ProblemDetail {
   time_limit: number;
   mem_limit: number;
   samples: Sample[];
+  editorial?: string;
 }
 
 export type SubmissionKind = "RUN" | "SUBMIT";

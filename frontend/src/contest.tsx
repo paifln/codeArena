@@ -1,3 +1,4 @@
+import { FeedbackForm } from "./components/FeedbackForm";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -67,8 +68,28 @@ export function Contest() {
         <Badge value={c.status} />
         <Timer contest={c} />
       </Heading>
+      <p className="muted">
+        {t(c.mode)} ? {t(c.scoring)}
+        {c.practice_enabled ? ` ? ${t("practiceEnabled")}` : ""}
+      </p>
       {teacher && (
         <div className="contest-controls">
+          <Button
+            variant="secondary"
+            disabled={a.busy}
+            onClick={() =>
+              a.execute(async () => {
+                await api(
+                  `/contests/${id}/practice`,
+                  { practice_enabled: !c.practice_enabled },
+                  "PATCH",
+                );
+                await q.invalidateQueries({ queryKey: ["contest", id] });
+              })
+            }
+          >
+            {t(c.practice_enabled ? "disablePractice" : "practiceEnabled")}
+          </Button>
           <span className="muted">{t("TEACHER")}</span>
           {(["DRAFT", "SCHEDULED"].includes(c.status)
             ? ["start"]
@@ -138,7 +159,7 @@ export function Contest() {
                   </span>
                   <div>
                     <h3>{p.title}</h3>
-                    <span className="muted">Python 3</span>
+                    <span className="muted">Python / C++ / Java</span>
                   </div>
                   {p.difficulty && <Badge value={p.difficulty} />}
                   <ArrowRight size={18} />
@@ -256,19 +277,21 @@ function Standings({ id }: { id: string }) {
                   [
                     t("name"),
                     t("solved"),
-                    t("penalty"),
+                    t(s.scoring === "PARTIAL" ? "points" : "penalty"),
                     ...s.problems.map((p: any) => p.letter),
                   ],
                   ...s.rows.map((r: any) => [
                     r.name,
                     r.solved,
-                    r.penalty,
+                    s.scoring === "PARTIAL" ? r.score : r.penalty,
                     ...r.cells.map((c: any) =>
-                      c.solved
-                        ? `+${c.attempts} (${c.minutes})`
-                        : c.attempts
-                          ? `-${c.attempts}`
-                          : "",
+                      s.scoring === "PARTIAL"
+                        ? c.score
+                        : c.solved
+                          ? `+${c.attempts} (${c.minutes})`
+                          : c.attempts
+                            ? `-${c.attempts}`
+                            : "",
                     ),
                   ]),
                 ])
@@ -288,7 +311,7 @@ function Standings({ id }: { id: string }) {
                   <th>#</th>
                   <th>{t("participants")}</th>
                   <th>{t("solved")}</th>
-                  <th>{t("penalty")}</th>
+                  <th>{t(s.scoring === "PARTIAL" ? "points" : "penalty")}</th>
                   {s.problems.map((p: any) => (
                     <th key={p.id} title={p.title}>
                       {p.letter}
@@ -298,26 +321,50 @@ function Standings({ id }: { id: string }) {
               </thead>
               <tbody>
                 {s.rows.map((r: any, i: number) => (
-                  <tr key={r.user_id}>
+                  <tr key={r.team_id || r.user_id}>
                     <td>
-                      <span className={`rank rank-${i + 1}`}>{i + 1}</span>
+                      <span className={`rank rank-${r.rank}`}>{r.rank}</span>
                     </td>
                     <td>
                       <strong>{r.name}</strong>
                     </td>
                     <td className="mono">{r.solved}</td>
-                    <td className="mono muted">{r.penalty}</td>
+                    <td className="mono muted">
+                      {s.scoring === "PARTIAL" ? r.score : r.penalty}
+                    </td>
                     {r.cells.map((c: any) => (
-                      <td key={c.problem_id}>
+                      <td
+                        key={c.problem_id}
+                        title={
+                          c.solved && s.scoring !== "PARTIAL"
+                            ? t("penaltyBreakdown", {
+                                time: c.time_minutes,
+                                penalty: c.penalty_minutes,
+                                total: c.penalty,
+                              })
+                            : undefined
+                        }
+                      >
                         <span
                           className={`score-cell ${c.solved ? "solved" : c.attempts ? "attempted" : ""}`}
                         >
-                          {c.solved
-                            ? `+${c.attempts > 0 ? c.attempts : ""}`
-                            : c.attempts
-                              ? `−${c.attempts}`
-                              : "·"}
-                          {c.solved && <small>{c.minutes}</small>}
+                          {s.scoring === "PARTIAL"
+                            ? c.score
+                            : c.solved
+                              ? `+${c.attempts || ""}`
+                              : c.attempts
+                                ? `-${c.attempts}`
+                                : "?"}
+                          {c.pending > 0 && <small>? {c.pending}</small>}
+                          {c.solved && s.scoring !== "PARTIAL" && (
+                            <small>
+                              {t("penaltyBreakdown", {
+                                time: c.time_minutes,
+                                penalty: c.penalty_minutes,
+                                total: c.penalty,
+                              })}
+                            </small>
+                          )}
                         </span>
                       </td>
                     ))}
@@ -370,6 +417,7 @@ export function Submissions({ contestId }: { contestId?: string }) {
             "QUEUED",
             "RUNNING",
             "ACCEPTED",
+            "PARTIAL",
             "WRONG_ANSWER",
             "TIME_LIMIT_EXCEEDED",
             "MEMORY_LIMIT_EXCEEDED",
@@ -416,7 +464,8 @@ export function Submissions({ contestId }: { contestId?: string }) {
                     <td>
                       <strong>{s.problem_title || `#${s.problem_id}`}</strong>
                       <small className="block muted">
-                        {s.kind === "RUN" ? t("run") : "Python 3"}
+                        {s.kind === "RUN" ? t("run") : s.language}{" "}
+                        {s.is_practice && ` ? ${t("practice")}`}
                       </small>
                     </td>
                     <td>
@@ -470,6 +519,13 @@ export function Submissions({ contestId }: { contestId?: string }) {
                 <ErrorBox error={a.error} />
                 <pre className="source-preview">{detail.data.source}</pre>
                 <Results result={detail.data} />
+                {teacher && (
+                  <FeedbackForm
+                    key={detail.data.id}
+                    id={detail.data.id}
+                    feedback={detail.data.feedback || ""}
+                  />
+                )}
               </>
             )}
           </>

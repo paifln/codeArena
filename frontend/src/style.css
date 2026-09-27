@@ -1,4 +1,90 @@
 @import "tailwindcss";
+.profile-menu {
+  position: relative;
+}
+.profile-trigger {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  background: var(--card);
+  color: var(--foreground);
+  cursor: pointer;
+}
+.profile-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.profile-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 70;
+  width: 250px;
+  max-width: calc(100vw - 24px);
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 12px 36px #0002;
+}
+.profile-summary {
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+.profile-summary small {
+  color: var(--muted);
+}
+.profile-dropdown [role="menuitem"] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  padding: 11px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  text-align: left;
+}
+.profile-dropdown [role="menuitem"]:hover,
+.profile-dropdown [role="menuitem"]:focus-visible {
+  background: var(--primary-soft);
+}
+.people-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.button.danger {
+  background: var(--danger);
+  color: var(--card);
+}
+.button.ghost.danger {
+  background: transparent;
+  color: var(--danger);
+}
+.button.ghost.danger:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.group-card > .button {
+  margin: 4px;
+}
+@media (max-width: 600px) {
+  .profile-name {
+    display: none;
+  }
+}
 .execution-notice {
   display: flex;
   align-items: flex-start;

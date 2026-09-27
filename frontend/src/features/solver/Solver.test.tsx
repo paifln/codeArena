@@ -165,3 +165,46 @@ it("reuses request ID after a lost response and prevents double clicks", async (
   await waitFor(() => expect(attempts).toHaveLength(2));
   expect(attempts[0].request_id).toBe(attempts[1].request_id);
 });
+it("keeps drafts separate for different languages and sends selected language", async () => {
+  mount();
+  fireEvent.change(await screen.findByLabelText("editor"), {
+    target: { value: "print(3)" },
+  });
+  const language = document.querySelector<HTMLSelectElement>(
+    ".editor-header select",
+  )!;
+  fireEvent.change(language, { target: { value: "cpp20" } });
+  await waitFor(() =>
+    expect((screen.getByLabelText("editor") as HTMLTextAreaElement).value).toBe(
+      "",
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("editor"), {
+    target: { value: "int main(){}" },
+  });
+  fireEvent.change(document.querySelector(".editor-header select")!, {
+    target: { value: "python3" },
+  });
+  await waitFor(() =>
+    expect((screen.getByLabelText("editor") as HTMLTextAreaElement).value).toBe(
+      "print(3)",
+    ),
+  );
+  fireEvent.click(document.querySelector(".editor-actions button")!);
+  await waitFor(() => expect(posts[0]?.language).toBe("python3"));
+});
+it("marks post-contest submissions as practice", async () => {
+  contest = {
+    ...contest,
+    status: "FINISHED",
+    practice_enabled: true,
+    execution: { allowed: false, reason: "CONTEST_FINISHED" },
+    practice_execution: { allowed: true, reason: null },
+  };
+  mount();
+  fireEvent.change(await screen.findByLabelText("editor"), {
+    target: { value: "print(3)" },
+  });
+  fireEvent.click(document.querySelectorAll(".editor-actions button")[1]);
+  await waitFor(() => expect(posts[0]?.practice).toBe(true));
+});

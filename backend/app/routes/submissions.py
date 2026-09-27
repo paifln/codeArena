@@ -1,7 +1,7 @@
 from ..services.submission_queue import enqueue_submission
 import time
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_
 from sqlalchemy.orm import Session as DBSession
 from ..db import get_db, lock_write
 from ..models import (
@@ -14,6 +14,7 @@ from ..models import (
 )
 from .. import schemas as S
 from ..security import current_user, teacher, owned
+from ..services.access import team_id_for
 from ..services import access_contest, audit, iso, judge_status, manager
 
 router = APIRouter()
@@ -22,7 +23,8 @@ router = APIRouter()
 def submission_public(db, s, u, detail=False):
     c = db.get(Contest, s.contest_id)
     privileged = manager(c, u)
-    if not privileged and s.user_id != u.id:
+    teammate = s.team_id is not None and s.team_id == team_id_for(db, c.id, u.id)
+    if not privileged and s.user_id != u.id and not teammate:
         raise HTTPException(404, "Submission not found")
     data = {
         k: getattr(s, k)
@@ -31,7 +33,7 @@ def submission_public(db, s, u, detail=False):
             "user_id",
             "problem_id",
             "contest_id",
-            "kind",
+            "kind", "language", "team_id", "is_practice", "score", "feedback",
             "status",
             "time_ms",
             "memory_kb",
@@ -47,7 +49,7 @@ def submission_public(db, s, u, detail=False):
         data["source"] = s.source
         data["error"] = (
             s.error
-            if privileged or s.kind == "RUN"
+            if privileged or s.kind == "RUN" or s.status == "COMPILATION_ERROR"
             else (
                 "Judge infrastructure error; ask your teacher to retry."
                 if s.status == "SYSTEM_ERROR"
@@ -99,7 +101,7 @@ def submissions(
         c = access_contest(db, contest_id, user)
         q = q.where(Submission.contest_id == c.id)
         if not manager(c, user):
-            q = q.where(Submission.user_id == user.id)
+            q = q.where(or_(Submission.user_id == user.id, Submission.team_id == (team_id_for(db, c.id, user.id) or -1)))
     elif user.role == "STUDENT":
         q = q.where(Submission.user_id == user.id)
     elif user.role == "TEACHER":
@@ -145,7 +147,7 @@ def rejudge(sid: int, user=Depends(teacher), db: DBSession = Depends(get_db)):
     s.history = [
         *(s.history or []),
         {
-            "status": s.status,
+            "status": s.status, "score": s.score,
             "finished_at": s.finished_at,
             "time_ms": s.time_ms,
             "version": s.problem_snapshot.get("version"),
@@ -158,13 +160,14 @@ def rejudge(sid: int, user=Depends(teacher), db: DBSession = Depends(get_db)):
     ).all()
     s.problem_snapshot = {
         "version": p.version,
+        "scoring": s.problem_snapshot.get("scoring", "ICPC"),
         "time_limit": p.time_limit,
         "mem_limit": p.mem_limit,
         "tests": [
             {
                 "input_data": t.input_data,
                 "expected": t.expected,
-                "is_sample": t.is_sample,
+                "is_sample": t.is_sample, "weight": t.weight,
             }
             for t in tests
             if s.kind == "SUBMIT" or t.is_sample
@@ -177,9 +180,23 @@ def rejudge(sid: int, user=Depends(teacher), db: DBSession = Depends(get_db)):
     s.attempt_count = 0
     s.error = ""
     s.time_ms = 0
+    s.score = 0
     db.execute(
         delete(SubmissionTestResult).where(SubmissionTestResult.submission_id == sid)
     )
     audit(db, user, "submission.rejudge", sid)
     db.commit()
     return submission_public(db, s, user)
+
+
+@router.patch("/submissions/{sid}/feedback")
+def feedback(sid: int, req: S.FeedbackIn, user=Depends(teacher), db: DBSession = Depends(get_db)):
+    lock_write(db)
+    s = db.get(Submission, sid)
+    if not s:
+        raise HTTPException(404, "Submission not found")
+    owned(db.get(Contest, s.contest_id), user)
+    s.feedback = req.feedback
+    audit(db, user, "submission.feedback", sid)
+    db.commit()
+    return submission_public(db, s, user, True)

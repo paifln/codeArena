@@ -43,6 +43,15 @@ class Session(Base):
     expires_at = Column(Float, nullable=False)
 
 
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+    id = Column(String(64), primary_key=True)
+    session_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    expires_at = Column(Float, nullable=False)
+    revoked = Column(Boolean, default=False, nullable=False)
+
+
 class Group(Timestamps, Base):
     __tablename__ = "groups"
     id = Column(Integer, primary_key=True)
@@ -77,6 +86,7 @@ class Problem(Timestamps, Base):
     tags = Column(JSON, default=list, nullable=False)
     translations = Column(JSON, default=dict, nullable=False)
     version = Column(Integer, default=1, nullable=False)
+    editorial = Column(Text, default="", nullable=False)
     __table_args__ = (
         CheckConstraint("difficulty IN ('EASY','MEDIUM','HARD')"),
         CheckConstraint("time_limit > 0 AND time_limit <= 10"),
@@ -97,6 +107,7 @@ class TestCase(Base):
     input_data = Column(Text, nullable=False)
     expected = Column(Text, nullable=False)
     is_sample = Column(Boolean, default=False, nullable=False)
+    weight = Column(Integer, default=1, nullable=False)
     __table_args__ = (UniqueConstraint("problem_id", "ordinal"),)
 
 
@@ -115,6 +126,9 @@ class Contest(Timestamps, Base):
     freeze_at = Column(Float)
     scoreboard_enabled = Column(Boolean, default=True, nullable=False)
     show_problem_difficulty = Column(Boolean, default=True, nullable=False)
+    mode = Column(String(16), default="INDIVIDUAL", nullable=False)
+    scoring = Column(String(16), default="ICPC", nullable=False)
+    practice_enabled = Column(Boolean, default=False, nullable=False)
     __table_args__ = (
         CheckConstraint("end_time > start_time"),
         CheckConstraint(
@@ -152,6 +166,10 @@ class Submission(Timestamps, Base):
     __tablename__ = "submissions"
     id = Column(Integer, primary_key=True)
     request_id = Column(String(36))
+    team_id = Column(Integer, ForeignKey("teams.id"))
+    is_practice = Column(Boolean, default=False, nullable=False)
+    score = Column(Float, default=0, nullable=False)
+    feedback = Column(Text, default="", nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     problem_id = Column(Integer, ForeignKey("problems.id"), nullable=False)
     contest_id = Column(Integer, ForeignKey("contests.id"), nullable=False)
@@ -243,3 +261,18 @@ class RateLimit(Base):
     key = Column(String(200), primary_key=True)
     count = Column(Integer, default=0, nullable=False)
     reset_at = Column(Float, nullable=False)
+
+
+class Team(Base):
+    __tablename__ = "teams"
+    id = Column(Integer, primary_key=True)
+    contest_id = Column(Integer, ForeignKey("contests.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(100), nullable=False)
+    __table_args__ = (UniqueConstraint("contest_id", "name"),)
+
+
+class TeamMember(Base):
+    __tablename__ = "team_members"
+    contest_id = Column(Integer, ForeignKey("contests.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)

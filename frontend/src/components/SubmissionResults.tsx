@@ -5,6 +5,18 @@ export function Results({ result }: { result: any }) {
   return (
     <div className="result-area" aria-live="polite">
       <Badge value={result.status} />
+      {result.is_practice && <span className="badge">{t("practice")}</span>}
+      {result.kind !== "RUN" && result.score != null && (
+        <p>
+          {t("points")}: {result.score}/100
+        </p>
+      )}
+      {result.feedback && (
+        <section className="notice">
+          <strong>{t("feedback")}</strong>
+          <p style={{ whiteSpace: "pre-wrap" }}>{result.feedback}</p>
+        </section>
+      )}
       {result.message && <pre>{result.message}</pre>}
       {result.error && <pre>{result.error}</pre>}
       {(result.tests || result.results || []).map((r: any, i: number) => (

@@ -5,18 +5,39 @@ from sqlalchemy.orm import Session as DBSession
 from ..db import get_db, lock_write
 from ..models import Group, GroupMember, User
 from .. import schemas as S
-from ..security import teacher, owned, user_public, hash_password
+from ..security import teacher, owned, user_public, hash_password, revoke_sessions
 from ..services import audit
+from ..services.people import managed_student, remove_student, remove_group
 
 router = APIRouter()
 
 
 @router.get("/users")
 def users(user=Depends(teacher), db: DBSession = Depends(get_db)):
-    q = select(User)
+    q = select(User).where(User.active.is_(True))
     if user.role != "ADMIN":
         q = q.where(User.creator_id == user.id)
     return [user_public(u) for u in db.scalars(q.order_by(User.name).limit(1000))]
+
+
+@router.delete("/users/{uid}", status_code=204)
+def delete_student(uid: int, user=Depends(teacher), db: DBSession = Depends(get_db)):
+    lock_write(db)
+    remove_student(db, managed_student(db, uid, user), user)
+    db.commit()
+
+
+@router.post("/users/{uid}/reset-password", status_code=204)
+def reset_student_password(
+    uid: int, req: S.PasswordReset, user=Depends(teacher), db: DBSession = Depends(get_db)
+):
+    hashed = hash_password(req.new_password)
+    lock_write(db)
+    student = managed_student(db, uid, user)
+    student.password_hash = hashed
+    revoke_sessions(db, uid)
+    audit(db, user, "student.password_reset", uid)
+    db.commit()
 
 
 @router.post("/users", status_code=201)
@@ -43,7 +64,7 @@ def group_data(db, g):
     members = db.scalars(
         select(User)
         .join(GroupMember, GroupMember.user_id == User.id)
-        .where(GroupMember.group_id == g.id)
+        .where(GroupMember.group_id == g.id, User.active.is_(True))
     ).all()
     return {
         "id": g.id,
@@ -78,11 +99,13 @@ def create_group(
 def assign_members(
     gid: int, req: S.Members, user=Depends(teacher), db: DBSession = Depends(get_db)
 ):
+    lock_write(db)
     g = owned(db.get(Group, gid), user)
     for uid in set(req.user_ids):
         u = db.get(User, uid)
         if (
             not u
+            or not u.active
             or u.role != "STUDENT"
             or (user.role != "ADMIN" and u.creator_id != user.id)
         ):
@@ -92,6 +115,13 @@ def assign_members(
     audit(db, user, "group.assign", gid, {"user_ids": req.user_ids})
     db.commit()
     return group_data(db, g)
+
+
+@router.delete("/groups/{gid}", status_code=204)
+def delete_group(gid: int, user=Depends(teacher), db: DBSession = Depends(get_db)):
+    lock_write(db)
+    remove_group(db, gid, user)
+    db.commit()
 
 
 @router.post("/groups/{gid}/students", status_code=201)

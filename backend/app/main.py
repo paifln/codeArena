@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -14,15 +15,31 @@ from .models import Announcement, Clarification, Session, Submission, User
 from .security import session_id
 from .services import access_contest, contest_status, iso, manager
 from .services.execution import execution_policy
+from .config import settings
+from .middleware.logging import configure_logging, event
+from .middleware.limits import limiter
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
-app = FastAPI(title="CodeArena", version="3.0.0")
+@asynccontextmanager
+async def lifespan(app):
+    settings()  # Fail closed when the signing key/configuration is absent or invalid.
+    configure_logging()
+    yield
+
+
+app = FastAPI(title="CodeArena", version="3.1.0", lifespan=lifespan, docs_url=None, redoc_url=None)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 if origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "X-CSRF-Token"],
     )
 
@@ -35,28 +52,41 @@ async def security_headers(request, call_next):
         if origin and origin not in allowed:
             return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
         size = request.headers.get("content-length")
-        if size and (not size.isdigit() or int(size) > 2_000_000):
+        if size and (not size.isdigit() or int(size) > 10 * 1024 * 1024):
             return JSONResponse({"detail": "Request body too large"}, status_code=413)
         # Bound streamed bodies too; do not trust Content-Length alone.
         total = 0
         chunks = []
         async for chunk in request.stream():
             total += len(chunk)
-            if total > 2_000_000:
+            if total > 10 * 1024 * 1024:
                 return JSONResponse(
                     {"detail": "Request body too large"}, status_code=413
                 )
             chunks.append(chunk)
         request._body = b"".join(chunks)
-    response = await call_next(request)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def response_security(request, call_next):
+    try:
+        response = await call_next(request)
+    except Exception:
+        response = JSONResponse({"detail": "Internal service error"}, status_code=500)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     )
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    if response.status_code >= 400:
+        route = request.scope.get("route")
+        event("http.error", method=request.method, route=getattr(route, "path", "unmatched"), status=response.status_code)
     return response
 
 
@@ -85,9 +115,9 @@ async def safe_error(request, exc):
     return JSONResponse({"detail": "Internal service error"}, status_code=500)
 
 
-from .routes import auth, users, problems, contests, submissions, communication
+from .routes import auth, users, problems, contests, submissions, communication, operations
 
-for route in (auth, users, problems, contests, submissions, communication):
+for route in (auth, users, problems, contests, submissions, communication, operations):
     app.include_router(route.router, prefix="/api/v1")
 
 

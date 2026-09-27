@@ -1,11 +1,11 @@
 from datetime import datetime
 from uuid import UUID
-from typing import Literal
-from pydantic import BaseModel, Field, model_validator, ConfigDict
+from typing import Literal, Annotated
+from pydantic import BaseModel, Field, model_validator, ConfigDict, field_validator
 
 
 class Input(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class Login(Input):
@@ -35,6 +35,10 @@ class PasswordChange(Input):
     new_password: str = Field(min_length=10, max_length=256)
 
 
+class PasswordReset(Input):
+    new_password: str = Field(min_length=10, max_length=256)
+
+
 class Members(Input):
     user_ids: list[int] = Field(min_length=1, max_length=200)
 
@@ -48,6 +52,7 @@ class TestIn(Input):
     input_data: str = Field(default="", max_length=64000)
     expected: str = Field(default="", max_length=64000)
     is_sample: bool = False
+    weight: int = Field(default=1, ge=0, le=100)
 
 
 class ProblemIn(Input):
@@ -59,12 +64,15 @@ class ProblemIn(Input):
     difficulty: Literal["EASY", "MEDIUM", "HARD"] = "EASY"
     time_limit: float = Field(default=2, ge=0.1, le=10)
     mem_limit: int = Field(default=128, ge=32, le=512)
-    tags: list[str] = Field(default_factory=list, max_length=12)
-    translations: dict = Field(default_factory=dict)
+    tags: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(default_factory=list, max_length=12)
+    translations: dict[Literal['ru', 'kk', 'en'], dict[Literal['title', 'description', 'input_fmt', 'output_fmt', 'constraints'], Annotated[str, Field(max_length=30000)]]] = Field(default_factory=dict, max_length=3)
     tests: list[TestIn] = Field(min_length=1, max_length=50)
+    editorial: str = Field(default="", max_length=30000)
 
     @model_validator(mode="after")
     def sample_required(self):
+        if not any(t.weight > 0 for t in self.tests):
+            raise ValueError("At least one test must have a positive weight")
         if not any(t.is_sample for t in self.tests):
             raise ValueError("At least one sample test is required")
         if (
@@ -80,6 +88,11 @@ class ProblemIn(Input):
         return self
 
 
+class TeamIn(Input):
+    name: str = Field(min_length=1, max_length=100)
+    user_ids: list[int] = Field(min_length=1, max_length=3)
+
+
 class ContestIn(Input):
     title: str = Field(min_length=2, max_length=200)
     description: str = Field(default="", max_length=10000)
@@ -91,6 +104,16 @@ class ContestIn(Input):
     participant_ids: list[int] = Field(default_factory=list, max_length=500)
     scoreboard_enabled: bool = True
     show_problem_difficulty: bool = True
+    mode: Literal["INDIVIDUAL", "TEAM"] = "INDIVIDUAL"
+    scoring: Literal["ICPC", "EDUCATIONAL", "PARTIAL"] = "ICPC"
+    practice_enabled: bool = False
+    teams: list[TeamIn] = Field(default_factory=list, max_length=200)
+
+    @field_validator("start_time", "end_time", mode="before")
+    @classmethod
+    def wire_datetime(cls, value):
+        # JSON has no native datetime; explicitly accept ISO strings only.
+        return datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def dates(self):
@@ -100,7 +123,15 @@ class ContestIn(Input):
             raise ValueError("End must be after start")
         if (self.end_time - self.start_time).total_seconds() > 604800:
             raise ValueError("Maximum duration is 7 days")
-        if not self.group_ids and not self.participant_ids:
+        if self.mode == "TEAM":
+            ids = [uid for team in self.teams for uid in team.user_ids]
+            if not ids or len(ids) != len(set(ids)) or self.group_ids or self.participant_ids:
+                raise ValueError("Team contests require unique team members and no individual/group assignments")
+            if len({t.name.casefold() for t in self.teams}) != len(self.teams):
+                raise ValueError("Team names must be unique")
+        elif self.teams:
+            raise ValueError("Teams require TEAM mode")
+        if not self.group_ids and not self.participant_ids and not self.teams:
             raise ValueError("Assign a group or student")
         if len(set(self.problem_ids)) != len(self.problem_ids):
             raise ValueError("Duplicate problems")
@@ -115,15 +146,21 @@ class SubmitIn(Input):
     request_id: UUID | None = None
     contest_id: int
     problem_id: int
-    source: str = Field(min_length=1, max_length=50000)
-    language: Literal["python3"] = "python3"
+    source: str = Field(min_length=1, max_length=65536)
+    language: Literal["python3", "cpp20", "java17"] = "python3"
+    practice: bool = False
     kind: Literal["RUN", "SUBMIT"] = "SUBMIT"
     custom_input: str | None = Field(default=None, max_length=64000)
 
+    @field_validator("request_id", mode="before")
+    @classmethod
+    def wire_uuid(cls, value):
+        return UUID(value) if isinstance(value, str) else value
+
     @model_validator(mode="after")
     def source_bytes(self):
-        if len(self.source.encode("utf-8")) > 128 * 1024:
-            raise ValueError("Source exceeds 128 KB")
+        if len(self.source.encode("utf-8")) > 64 * 1024:
+            raise ValueError("Source exceeds 64 KB")
         return self
 
 
@@ -140,3 +177,11 @@ class Answer(Input):
 class AnnouncementIn(Input):
     message: str = Field(min_length=1, max_length=5000)
     level: Literal["INFO", "WARNING", "IMPORTANT"] = "INFO"
+
+
+class FeedbackIn(Input):
+    feedback: str = Field(max_length=5000)
+
+
+class PracticeSettings(Input):
+    practice_enabled: bool

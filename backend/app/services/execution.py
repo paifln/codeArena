@@ -4,7 +4,7 @@ from .access import contest_status
 from .judge_health import judge_status
 
 
-def execution_policy(db, contest):
+def execution_policy(db, contest, practice=False):
     state = contest_status(contest)
     reason = {
         "DRAFT": "CONTEST_NOT_STARTED",
@@ -13,6 +13,8 @@ def execution_policy(db, contest):
         "FINISHED": "CONTEST_FINISHED",
         "ARCHIVED": "CONTEST_FINISHED",
     }.get(state)
+    if practice:
+        reason = None if state == "FINISHED" and contest.practice_enabled else "PRACTICE_UNAVAILABLE"
     if reason is None and not judge_status(db)["judge_available"]:
         reason = "JUDGE_UNAVAILABLE"
     return {"allowed": reason is None, "reason": reason}

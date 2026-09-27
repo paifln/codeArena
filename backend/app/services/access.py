@@ -7,7 +7,7 @@ from ..models import (
     ContestParticipant,
     ContestProblem,
     GroupMember,
-    Problem,
+    Problem, TeamMember,
 )
 
 
@@ -36,6 +36,7 @@ def participant_ids(db, c):
     direct.update(
         db.scalars(select(GroupMember.user_id).where(GroupMember.group_id.in_(groups)))
     )
+    direct.update(db.scalars(select(TeamMember.user_id).where(TeamMember.contest_id == c.id)))
     return direct
 
 
@@ -62,3 +63,7 @@ def problem_pairs(db, c):
         .where(ContestProblem.contest_id == c.id)
         .order_by(ContestProblem.ordinal)
     ).all()
+
+
+def team_id_for(db, cid, uid):
+    return db.scalar(select(TeamMember.team_id).where(TeamMember.contest_id == cid, TeamMember.user_id == uid))

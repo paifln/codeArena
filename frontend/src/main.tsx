@@ -1,3 +1,5 @@
+import { Operations } from "./components/Operations";
+import { ProfileMenu } from "./components/ProfileMenu";
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
@@ -8,7 +10,6 @@ import {
   Activity,
   BookOpen,
   Home,
-  LogOut,
   Menu,
   Moon,
   Settings,
@@ -231,6 +232,15 @@ function Application() {
           ["/groups", Users, "groups"] as [string, typeof Home, string],
         ]
       : []),
+    ...(user.role === "ADMIN"
+      ? [
+          ["/operations", Activity, "operations"] as [
+            string,
+            typeof Home,
+            string,
+          ],
+        ]
+      : []),
     ["/submissions", Activity, "submissions"],
   ];
   return (
@@ -257,22 +267,6 @@ function Application() {
             <Settings size={18} />
             {t("settings")}
           </NavLink>
-          <button
-            className="profile"
-            onClick={async () => {
-              await api("/auth/logout", {});
-              setUser(null);
-              queryClient.clear();
-              nav("/");
-            }}
-          >
-            <span className="avatar">{user.name.slice(0, 1)}</span>
-            <span>
-              <strong>{user.name}</strong>
-              <small>{t(user.role)}</small>
-            </span>
-            <LogOut size={17} />
-          </button>
         </div>
       </aside>
       <div className="main-shell">
@@ -310,7 +304,15 @@ function Application() {
             >
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <span className="avatar small">{user.name.slice(0, 1)}</span>
+            <ProfileMenu
+              user={user}
+              onLogout={async () => {
+                await api("/auth/logout", {});
+                setUser(null);
+                queryClient.clear();
+                nav("/");
+              }}
+            />
           </div>
         </header>
         {(!online || status.isError) && (
@@ -333,6 +335,9 @@ function Application() {
                 <Route path="/problems" element={<Problems />} />
                 <Route path="/groups" element={<Groups />} />
               </>
+            )}
+            {user.role === "ADMIN" && (
+              <Route path="/operations" element={<Operations />} />
             )}
             <Route path="/submissions" element={<Submissions />} />
             <Route

@@ -1,4 +1,9 @@
-﻿import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ContestOptions, defaultOptions } from "./components/ContestOptions";
+import {
+  PeopleActionDialog,
+  type PeopleAction,
+} from "./components/PeopleActionDialog";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   BookOpen,
@@ -189,6 +194,7 @@ function ContestForm({ close }: { close: () => void }) {
   const nav = useNavigate();
   const q = useQueryClient();
   const a = useAction();
+  const [options, setOptions] = useState(defaultOptions);
   const problems = useList("/problems");
   const groups = useList("/groups");
   const [pids, setPids] = useState<number[]>([]);
@@ -208,12 +214,13 @@ function ContestForm({ close }: { close: () => void }) {
         const f = new FormData(e.currentTarget);
         a.execute(async () => {
           const c = await api("/contests", {
+            ...options,
             title: f.get("title"),
             description: f.get("description"),
             start_time: new Date(String(f.get("start"))).toISOString(),
             end_time: new Date(String(f.get("end"))).toISOString(),
             problem_ids: pids,
-            group_ids: gids,
+            group_ids: options.mode === "TEAM" ? [] : gids,
             participant_ids: [],
             scoreboard_enabled: f.get("scoreboard") === "on",
           });
@@ -247,6 +254,7 @@ function ContestForm({ close }: { close: () => void }) {
           />
         </Field>
       </div>
+      <ContestOptions value={options} onChange={setOptions} />
       <h3>{t("selectProblems")}</h3>
       <div className="selection-list">
         {problems.data?.map((p) => (
@@ -262,19 +270,23 @@ function ContestForm({ close }: { close: () => void }) {
         ))}
         {!problems.data?.length && <p className="muted">{t("noProblems")}</p>}
       </div>
-      <h3>{t("assignGroups")}</h3>
-      <div className="selection-list">
-        {groups.data?.map((g) => (
-          <label key={g.id} className="check-row">
-            <input
-              type="checkbox"
-              checked={gids.includes(g.id)}
-              onChange={() => setGids(toggle(gids, g.id))}
-            />
-            {g.name}
-          </label>
-        ))}
-      </div>
+      {options.mode !== "TEAM" && (
+        <>
+          <h3>{t("assignGroups")}</h3>
+          <div className="selection-list">
+            {groups.data?.map((g) => (
+              <label key={g.id} className="check-row">
+                <input
+                  type="checkbox"
+                  checked={gids.includes(g.id)}
+                  onChange={() => setGids(toggle(gids, g.id))}
+                />
+                {g.name}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
       <label className="check-row">
         <input type="checkbox" name="scoreboard" defaultChecked />
         {t("showScoreboard")}
@@ -394,6 +406,7 @@ function ProblemForm({
             {
               title: f.get("title"),
               description: desc,
+              editorial: f.get("editorial"),
               input_fmt: f.get("input"),
               output_fmt: f.get("output"),
               difficulty: f.get("difficulty"),
@@ -455,6 +468,15 @@ function ProblemForm({
           />
         </Field>
       </div>
+      <Field label={t("editorial")}>
+        <textarea
+          name="editorial"
+          rows={5}
+          maxLength={30000}
+          defaultValue={existing?.editorial || ""}
+        />
+      </Field>
+      <p className="muted">{t("editorialHint")}</p>
       <div className="form-grid three">
         <Field label={t("difficulty")}>
           <select
@@ -548,6 +570,21 @@ function ProblemForm({
               <Trash2 size={16} />
             </button>
           </div>
+          <Field label={t("weight")}>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={test.weight ?? 1}
+              onChange={(e) =>
+                setTests(
+                  tests.map((x, j) =>
+                    i === j ? { ...x, weight: Number(e.target.value) } : x,
+                  ),
+                )
+              }
+            />
+          </Field>
           <div className="form-grid">
             {["input_data", "expected"].map((key) => (
               <Field
@@ -716,6 +753,7 @@ export function Groups() {
   const [create, setCreate] = useState(false);
   const [selected, setSelected] = useState<any>(null);
   const [credentials, setCredentials] = useState<any[] | null>(null);
+  const [peopleAction, setPeopleAction] = useState<PeopleAction | null>(null);
   const a = useAction();
   const q = useQueryClient();
   return (
@@ -726,7 +764,7 @@ export function Groups() {
           {t("newGroup")}
         </Button>
       </Heading>
-      <ErrorBox error={list.error} />
+      <ErrorBox error={list.error || users.error} />
       {list.isPending ? (
         <Loading />
       ) : list.data?.length ? (
@@ -751,6 +789,15 @@ export function Groups() {
                 <Plus size={16} />
                 {t("addStudents")}
               </Button>
+              <Button
+                variant="ghost danger"
+                onClick={() =>
+                  setPeopleAction({ kind: "group", id: g.id, name: g.name })
+                }
+              >
+                <Trash2 size={16} />
+                {t("deleteGroup")}
+              </Button>
             </div>
           ))}
         </div>
@@ -767,6 +814,7 @@ export function Groups() {
                 <th>{t("name")}</th>
                 <th>{t("username")}</th>
                 <th>{t("groups")}</th>
+                <th>{t("actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -777,15 +825,54 @@ export function Groups() {
                     <td>{u.name}</td>
                     <td className="mono">{u.username}</td>
                     <td>
-                      {u.groups
-                        ?.map((g: any) => (typeof g === "string" ? g : g.name))
-                        .join(", ") || "—"}
+                      {list.data
+                        ?.filter((g) =>
+                          g.members?.some((m: any) => m.id === u.id),
+                        )
+                        .map((g) => g.name)
+                        .join(", ") || "?"}
+                    </td>
+                    <td>
+                      <div className="people-actions">
+                        <Button
+                          variant="ghost"
+                          onClick={() =>
+                            setPeopleAction({
+                              kind: "password",
+                              id: u.id,
+                              name: u.name,
+                            })
+                          }
+                        >
+                          {t("resetPassword")}
+                        </Button>
+                        <Button
+                          variant="ghost danger"
+                          onClick={() =>
+                            setPeopleAction({
+                              kind: "student",
+                              id: u.id,
+                              name: u.name,
+                            })
+                          }
+                        >
+                          <Trash2 size={15} />
+                          {t("deleteStudent")}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
             </tbody>
           </table>
         </section>
+      )}
+      {peopleAction && (
+        <PeopleActionDialog
+          key={`${peopleAction.kind}:${peopleAction.id}`}
+          target={peopleAction}
+          onClose={() => setPeopleAction(null)}
+        />
       )}
       <Modal
         title={t("newGroup")}

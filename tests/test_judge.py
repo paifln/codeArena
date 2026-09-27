@@ -176,3 +176,13 @@ def test_concurrent_initial_heartbeat_is_atomic(queue_db):
     with queue_db() as db:
         record = db.get(SystemSetting, 'judge_heartbeat')
         assert record.value['available'] is True
+
+
+def test_partial_checks_all_tests_with_weights():
+    from judge.sandbox import Execution
+    class Weighted(FakeSandbox):
+        def run(self, source, stdin, limits, *, compile_only=False):
+            return Execution() if compile_only else Execution(stdout='3' if stdin=='easy' else 'wrong')
+    snapshot={'scoring':'PARTIAL','tests':[{'input_data':'easy','expected':'3','weight':1},{'input_data':'hard','expected':'7','weight':3}]}
+    result=judge('', 'python3', snapshot, sandbox=Weighted())
+    assert result.score==25 and result.verdict=='PARTIAL' and len(result.tests)==2

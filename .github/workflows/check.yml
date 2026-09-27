@@ -21,4 +21,5 @@ jobs:
       - run: python -m pytest tests -q
         env:
           RUN_SANDBOX_TESTS: '1'
+      - run: python tools/init_env.py
       - run: docker compose config --quiet

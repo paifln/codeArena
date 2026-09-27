@@ -73,3 +73,48 @@ def test_rejudge_preserves_the_verdict_visible_before_freeze(arena):
     db.commit()
     assert scoreboard(db, contest, student)['rows'][0]['solved'] == 1
     assert scoreboard(db, contest, teacher)['rows'][0]['solved'] == 0
+
+
+def test_compile_errors_never_penalize_and_unsolved_time_is_zero(arena):
+    db,teacher,student,problem,contest=arena
+    submission(db,student,problem,contest,'COMPILATION_ERROR',1)
+    submission(db,student,problem,contest,'WRONG_ANSWER',2)
+    assert scoreboard(db,contest,student)['rows'][0]['penalty']==0
+    submission(db,student,problem,contest,'ACCEPTED',35)
+    row=scoreboard(db,contest,student)['rows'][0]
+    assert row['penalty']==55 and row['cells'][0]['attempts']==1
+    assert row['cells'][0]['time_minutes']==35 and row['cells'][0]['penalty_minutes']==20
+
+
+def test_equal_results_share_rank_and_training_has_no_penalty(arena):
+    db,teacher,student,problem,contest=arena
+    other=User(username='second',name='A Student',role='STUDENT',password_hash='unused')
+    db.add(other);db.flush();db.add(ContestParticipant(contest_id=contest.id,user_id=other.id));db.commit()
+    submission(db,student,problem,contest,'ACCEPTED',5)
+    submission(db,other,problem,contest,'ACCEPTED',5)
+    rows=scoreboard(db,contest,student)['rows']
+    assert [r['rank'] for r in rows]==[1,1] and rows[0]['name']=='A Student'
+    contest.scoring='EDUCATIONAL';db.commit()
+    assert all(r['penalty']==0 for r in scoreboard(db,contest,student)['rows'])
+
+
+def test_partial_uses_best_submission_not_sum(arena):
+    db,teacher,student,problem,contest=arena
+    contest.scoring='PARTIAL';db.commit()
+    submission(db,student,problem,contest,'PARTIAL',1,score=30)
+    submission(db,student,problem,contest,'PARTIAL',2,score=60)
+    submission(db,student,problem,contest,'PARTIAL',3,score=20)
+    row=scoreboard(db,contest,student)['rows'][0]
+    assert row['score']==60 and row['penalty']==0 and row['solved']==0
+
+
+def test_last_acceptance_breaks_equal_icpc_totals(arena):
+    db,teacher,student,problem,contest=arena
+    other=User(username='other',name='Other',role='STUDENT',password_hash='unused')
+    db.add(other);db.flush();db.add(ContestParticipant(contest_id=contest.id,user_id=other.id));db.commit()
+    submission(db,student,problem,contest,'ACCEPTED',25)
+    submission(db,other,problem,contest,'WRONG_ANSWER',1)
+    submission(db,other,problem,contest,'ACCEPTED',5)
+    rows=scoreboard(db,contest,student)['rows']
+    assert rows[0]['user_id']==other.id and rows[0]['penalty']==rows[1]['penalty']==25
+    assert [row['rank'] for row in rows]==[1,2]

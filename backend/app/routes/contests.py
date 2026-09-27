@@ -10,7 +10,7 @@ from ..models import (
     ContestProblem,
     Group,
     Problem,
-    User,
+    User, Team, TeamMember,
 )
 from .. import schemas as S
 from ..security import current_user, teacher, owned
@@ -45,14 +45,16 @@ def contests(user=Depends(current_user), db: DBSession = Depends(get_db)):
 def create_contest(
     req: S.ContestIn, user=Depends(teacher), db: DBSession = Depends(get_db)
 ):
+    lock_write(db)
     for pid in req.problem_ids:
         owned(db.get(Problem, pid), user)
     for gid in req.group_ids:
         owned(db.get(Group, gid), user)
-    for uid in req.participant_ids:
+    for uid in [*req.participant_ids, *(uid for team in req.teams for uid in team.user_ids)]:
         u = db.get(User, uid)
         if (
             not u
+            or not u.active
             or u.role != "STUDENT"
             or (user.role != "ADMIN" and u.creator_id != user.id)
         ):
@@ -60,6 +62,7 @@ def create_contest(
     c = Contest(
         **req.model_dump(
             exclude={
+                "teams",
                 "problem_ids",
                 "group_ids",
                 "participant_ids",
@@ -80,6 +83,11 @@ def create_contest(
         db.add(ContestGroup(contest_id=c.id, group_id=gid))
     for uid in set(req.participant_ids):
         db.add(ContestParticipant(contest_id=c.id, user_id=uid))
+    for item in req.teams:
+        team = Team(contest_id=c.id, name=item.name)
+        db.add(team); db.flush()
+        for uid in item.user_ids:
+            db.add(TeamMember(contest_id=c.id, team_id=team.id, user_id=uid))
     audit(db, user, "contest.create", c.id)
     db.commit()
     return contest_public(db, c, user)
@@ -90,6 +98,16 @@ def contest_detail(
     cid: int, user=Depends(current_user), db: DBSession = Depends(get_db)
 ):
     c = access_contest(db, cid, user)
+    return contest_public(db, c, user)
+
+
+@router.patch("/contests/{cid}/practice")
+def configure_practice(cid: int, req: S.PracticeSettings, user=Depends(teacher), db: DBSession = Depends(get_db)):
+    lock_write(db)
+    c = owned(db.get(Contest, cid), user)
+    c.practice_enabled = req.practice_enabled
+    audit(db, user, "contest.practice", cid, {"enabled": req.practice_enabled})
+    db.commit()
     return contest_public(db, c, user)
 
 
