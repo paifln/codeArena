@@ -6,7 +6,7 @@ export type Options = {
   mode: string;
   scoring: string;
   practice_enabled: boolean;
-  teams: { name: string; user_ids: number[] }[];
+  teams: { name: string; user_ids: number[]; organization?: string }[];
 };
 export const defaultOptions: Options = {
   mode: "INDIVIDUAL",
@@ -93,6 +93,19 @@ export function ContestOptions({
                 />
               </Field>
               <div className="selection-list">
+                <Field label={t("organization")}>
+                  <input
+                    maxLength={120}
+                    value={team.organization || ""}
+                    onChange={(e) =>
+                      update({
+                        teams: value.teams.map((x, j) =>
+                          j === i ? { ...x, organization: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                </Field>
                 {users.data
                   ?.filter((u) => u.role === "STUDENT")
                   .map((u) => (

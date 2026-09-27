@@ -119,6 +119,8 @@ def queue_db(tmp_path):
     Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
     with factory() as db:
+        from app.models import Contest
+        db.add(Contest(id=1,title='Queue fixture',author_id=1,start_time=1,end_time=2))
         # Queue tests isolate lease mechanics; application tests cover foreign keys.
         db.add(Submission(user_id=1, contest_id=1, problem_id=1, source='print(3)',
                           language='python3', kind='SUBMIT', problem_snapshot=SNAPSHOT))

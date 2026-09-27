@@ -1,9 +1,10 @@
 import time
 from sqlalchemy import select
-from ..models import TestCase, Team, TeamMember
+from ..models import TestCase, Team, TeamMember, ProblemDocument
 from .access import contest_status, manager, participant_ids, problem_pairs
 from .common import iso
 from .execution import execution_policy
+from .scoreboard import freeze_cutoff
 
 
 def contest_public(db, c, u):
@@ -12,9 +13,28 @@ def contest_public(db, c, u):
     pairs = problem_pairs(db, c)
     return {
         "id": c.id,
-        "mode": c.mode, "scoring": c.scoring, "practice_enabled": c.practice_enabled,
+        "languages": c.languages,
+        "penalty_minutes": c.penalty_minutes,
+        "public_scoreboard": c.public_scoreboard,
+        "logo_data": c.logo_data,
+        "freeze_at": iso(c.freeze_at),
+        "mode": c.mode,
+        "scoring": c.scoring,
+        "practice_enabled": c.practice_enabled,
         "practice_execution": execution_policy(db, c, practice=True),
-        "teams": [{"id": team.id, "name": team.name, "user_ids": list(db.scalars(select(TeamMember.user_id).where(TeamMember.team_id == team.id)))} for team in db.scalars(select(Team).where(Team.contest_id == c.id))],
+        "teams": [
+            {
+                "id": team.id,
+                "name": team.name,
+                "organization": team.organization,
+                "user_ids": list(
+                    db.scalars(
+                        select(TeamMember.user_id).where(TeamMember.team_id == team.id)
+                    )
+                ),
+            }
+            for team in db.scalars(select(Team).where(Team.contest_id == c.id))
+        ],
         "title": c.title,
         "description": c.description,
         "rules": c.rules,
@@ -26,7 +46,7 @@ def contest_public(db, c, u):
         "server_time": iso(time.time()),
         "paused_at": iso(c.paused_at),
         "scoreboard_enabled": c.scoreboard_enabled,
-        "frozen": c.freeze_at is not None,
+        "frozen": freeze_cutoff(c) is not None,
         "author_id": c.author_id,
         "participant_count": len(participant_ids(db, c)),
         "problem_count": len(pairs),
@@ -65,6 +85,14 @@ def problem_public(db, p, teacher=False, language="ru"):
             "author_id",
         )
     }
+    data["documents"] = [
+        {"id": r.id, "name": r.name, "size": r.size}
+        for r in db.execute(
+            select(
+                ProblemDocument.id, ProblemDocument.name, ProblemDocument.size
+            ).where(ProblemDocument.problem_id == p.id)
+        )
+    ]
     translation = (p.translations or {}).get(language, {})
     for key in ("title", "description", "input_fmt", "output_fmt", "constraints"):
         if isinstance(translation.get(key), str):
@@ -73,7 +101,12 @@ def problem_public(db, p, teacher=False, language="ru"):
         select(TestCase).where(TestCase.problem_id == p.id).order_by(TestCase.ordinal)
     ).all()
     data["tests"] = [
-        {"input_data": t.input_data, "expected": t.expected, "is_sample": t.is_sample, **({"weight": t.weight} if teacher else {})}
+        {
+            "input_data": t.input_data,
+            "expected": t.expected,
+            "is_sample": t.is_sample,
+            **({"weight": t.weight} if teacher else {}),
+        }
         for t in tests
         if teacher or t.is_sample
     ]

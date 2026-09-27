@@ -11,6 +11,8 @@ from sqlalchemy import delete, select, update
 from app.db import SessionLocal
 from app.models import Submission, SubmissionTestResult, SystemSetting
 from app.middleware.logging import configure_logging, event
+from app.services.contest_events import judged, lifecycle
+from app.services.rejudging import pump_batches
 from .engine import Judgement, judge
 from .limits import LEASE_SECONDS
 from .sandbox import DockerSandbox
@@ -27,7 +29,7 @@ def heartbeat(factory, available, detail):
             from sqlalchemy import text
             db.execute(text('BEGIN IMMEDIATE'))
         record = db.get(SystemSetting, 'judge_heartbeat')
-        value = {'time': time.time(), 'available': available, 'detail': detail}
+        value = {'time': time.time(), 'available': available, 'detail': detail, 'slots':max(1,min(4,int(os.getenv('JUDGE_CONCURRENCY','2'))))}
         if record is None:
             db.add(SystemSetting(key='judge_heartbeat', value=value))
         else:
@@ -84,6 +86,8 @@ def persist(factory, job, result):
         db.execute(delete(SubmissionTestResult).where(SubmissionTestResult.submission_id == job['id']))
         for item in result.tests:
             db.add(SubmissionTestResult(submission_id=job['id'], **item))
+        db.flush()
+        judged(db,db.get(Submission,job['id']))
         db.commit()
         event("judge.verdict", submission_id=job['id'], verdict=str(result.verdict), score=result.score)
         return True
@@ -122,6 +126,12 @@ def main():
             try:
                 ready, detail = sandbox.available()
                 heartbeat(SessionLocal, ready, detail)
+                with SessionLocal() as db:
+                    from app.db import lock_write
+                    lock_write(db)
+                    lifecycle(db)
+                    if ready: pump_batches(db)
+                    db.commit()
                 if ready:
                     sandbox.cleanup_expired()
             except Exception:

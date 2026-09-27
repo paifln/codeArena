@@ -73,3 +73,34 @@ config.py validates deployment settings; middleware/ owns rate limiting and JSON
 events. JWT session families remain checked in SQLite on every authenticated
 request so password resets take effect immediately. See SECURITY.md for exact
 policies and compatibility notes.
+
+## Version 3.2 contest operations
+
+Migration 0005 adds contest display/rule settings, scoped audit events, presence,
+unique puzzle rewards and durable rejudge batches. Existing tables are extended
+without rebuilding the submission parent table. No second event bus is introduced:
+the worker records judgement and reward events in the same transaction as the verdict.
+
+`services/scoreboard.py` owns live, public, frozen and historical projections.
+Public HTTP and WebSocket routes use that projection; they cannot read the jury
+reward ledger. Revealed submission IDs persist on the contest. Rejudge history
+keeps the previous result visible while a job is pending and allows replay without
+execution. Replay fidelity is limited by retained timestamps/history.
+
+`services/contest_events.py` reconciles one reward per identity/problem and retains
+delivery history when a solve is revoked. The existing worker heartbeat performs
+idempotent legacy reward initialization, presence expiry, lifecycle events and
+batch admission. Presence means a contest page heartbeat within 60 seconds,
+not proof that a participant is physically present.
+
+`services/rejudging.py` feeds durable batches into the existing capacity-limited
+queue. `services/control_center.py` assembles organizer statistics. Slots represent
+threads in the one worker process; there is no distributed worker scheduler.
+`services/problem_packages.py` is the validated JSON ZIP adapter boundary for
+future formats. Uploaded final images are decoded and re-encoded with bounded size.
+
+React features under `features/contest/` share the scoreboard, wizard and display
+components. Existing authenticated WebSockets invalidate query caches; public
+WebSockets expose only a visible-standings revision. HTTP polling is a fallback.
+Public display is opt-in; mobile delivery retains organizer/admin permissions.
+The SQLite/single-API/single-worker deployment boundary remains unchanged.

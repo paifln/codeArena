@@ -64,8 +64,16 @@ class ProblemIn(Input):
     difficulty: Literal["EASY", "MEDIUM", "HARD"] = "EASY"
     time_limit: float = Field(default=2, ge=0.1, le=10)
     mem_limit: int = Field(default=128, ge=32, le=512)
-    tags: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(default_factory=list, max_length=12)
-    translations: dict[Literal['ru', 'kk', 'en'], dict[Literal['title', 'description', 'input_fmt', 'output_fmt', 'constraints'], Annotated[str, Field(max_length=30000)]]] = Field(default_factory=dict, max_length=3)
+    tags: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(
+        default_factory=list, max_length=12
+    )
+    translations: dict[
+        Literal["ru", "kk", "en"],
+        dict[
+            Literal["title", "description", "input_fmt", "output_fmt", "constraints"],
+            Annotated[str, Field(max_length=30000)],
+        ],
+    ] = Field(default_factory=dict, max_length=3)
     tests: list[TestIn] = Field(min_length=1, max_length=50)
     editorial: str = Field(default="", max_length=30000)
 
@@ -90,7 +98,8 @@ class ProblemIn(Input):
 
 class TeamIn(Input):
     name: str = Field(min_length=1, max_length=100)
-    user_ids: list[int] = Field(min_length=1, max_length=3)
+    organization: str = Field(default="", max_length=120)
+    user_ids: list[int] = Field(min_length=1, max_length=6)
 
 
 class ContestIn(Input):
@@ -108,12 +117,26 @@ class ContestIn(Input):
     scoring: Literal["ICPC", "EDUCATIONAL", "PARTIAL"] = "ICPC"
     practice_enabled: bool = False
     teams: list[TeamIn] = Field(default_factory=list, max_length=200)
+    penalty_minutes: int = Field(default=20, ge=0, le=120)
+    freeze_minutes: int = Field(default=0, ge=0, le=1440)
+    languages: list[
+        Literal["python3", "cpp20", "java17", "javascript", "go", "csharp"]
+    ] = Field(
+        default_factory=lambda: ["python3", "cpp20", "java17"],
+        min_length=1,
+        max_length=6,
+    )
+    public_scoreboard: bool = False
 
     @field_validator("start_time", "end_time", mode="before")
     @classmethod
     def wire_datetime(cls, value):
         # JSON has no native datetime; explicitly accept ISO strings only.
-        return datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
+        return (
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if isinstance(value, str)
+            else value
+        )
 
     @model_validator(mode="after")
     def dates(self):
@@ -121,12 +144,24 @@ class ContestIn(Input):
             raise ValueError("Dates require a timezone")
         if self.end_time <= self.start_time:
             raise ValueError("End must be after start")
+        if (
+            self.freeze_minutes * 60
+            >= (self.end_time - self.start_time).total_seconds()
+        ):
+            raise ValueError("Freeze must be shorter than the contest")
         if (self.end_time - self.start_time).total_seconds() > 604800:
             raise ValueError("Maximum duration is 7 days")
         if self.mode == "TEAM":
             ids = [uid for team in self.teams for uid in team.user_ids]
-            if not ids or len(ids) != len(set(ids)) or self.group_ids or self.participant_ids:
-                raise ValueError("Team contests require unique team members and no individual/group assignments")
+            if (
+                not ids
+                or len(ids) != len(set(ids))
+                or self.group_ids
+                or self.participant_ids
+            ):
+                raise ValueError(
+                    "Team contests require unique team members and no individual/group assignments"
+                )
             if len({t.name.casefold() for t in self.teams}) != len(self.teams):
                 raise ValueError("Team names must be unique")
         elif self.teams:
@@ -147,7 +182,9 @@ class SubmitIn(Input):
     contest_id: int
     problem_id: int
     source: str = Field(min_length=1, max_length=65536)
-    language: Literal["python3", "cpp20", "java17"] = "python3"
+    language: Literal["python3", "cpp20", "java17", "javascript", "go", "csharp"] = (
+        "python3"
+    )
     practice: bool = False
     kind: Literal["RUN", "SUBMIT"] = "SUBMIT"
     custom_input: str | None = Field(default=None, max_length=64000)
@@ -185,3 +222,31 @@ class FeedbackIn(Input):
 
 class PracticeSettings(Input):
     practice_enabled: bool
+
+
+class DisplaySettings(Input):
+    public_scoreboard: bool
+
+
+class RejudgeIn(Input):
+    problem_id: int | None = None
+    affected_only: bool = False
+
+
+class TeamsCSV(Input):
+    csv: str = Field(min_length=1, max_length=100000)
+
+
+class LogoIn(Input):
+    data: str = Field(max_length=700000)
+
+
+class ExternalProblemIn(Input):
+    url: str = Field(max_length=500)
+    html: str | None = Field(default=None, max_length=2_000_000)
+
+
+class ContestLanguages(Input):
+    languages: list[
+        Literal["python3", "cpp20", "java17", "javascript", "go", "csharp"]
+    ] = Field(min_length=1, max_length=6)

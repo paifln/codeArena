@@ -1,8 +1,8 @@
-﻿# CodeArena
+# CodeArena
 
-A self-hosted programming contest and teaching platform for schools and universities. Students write Python, C++ or Java in the browser; a separate Docker judge evaluates solutions.
+A self-hosted programming contest platform for local school and university competitions. Participants write Python, C++, Java, JavaScript, Go or C# in the browser; a separate Docker judge evaluates solutions.
 
-**Version 3.1** adds teams, educational contests, ICPC tie handling, partial credit, practice, editorials, teacher feedback, operations monitoring and verified automatic backups.
+**Version 3.3** adds PDF/DOCX attachments, external statement import, JavaScript/Go/C# judging, explainable comment review and an optional managed-Windows network script. It builds on the control center, public displays, reveal/replay and puzzle rewards from 3.2. Migration 0006 preserves existing data. CodeArena focuses on running contests, not courses or an LMS.
 
 ## Features
 
@@ -31,7 +31,7 @@ Open **http://localhost:8000** and create the first administrator. No default cr
 
 The first build downloads dependencies and compilers. Once built, classroom operation does not require a CDN or cloud API. On Linux set `DOCKER_GID` to the group returned by `stat -c %g /var/run/docker.sock`; create `backups/` and grant UID 10001 write access.
 
-## Classroom workflow
+## Contest workflow
 
 1. Administrators create teachers in Settings. Teachers create groups and students in Groups and distribute individual credentials privately.
 2. Create problems with sample/hidden tests. Test weights default to 1; 0 excludes a test from partial points. Optionally write a Markdown editorial.
@@ -44,6 +44,29 @@ Use `http://<server-LAN-IP>:8000` from classroom devices. Their localhost is not
 
 In Groups, administrators and the owning teacher can reset passwords, delete groups and remove students. Group deletion preserves accounts. Student removal revokes sessions/memberships, retains submission history and reserves the username. Password reset ends current student sessions. Sign out through the top-right profile menu.
 
+
+### Control center and team import
+
+Open **Control center** inside a contest to manage standings, submissions, teams, problems, judging, questions, puzzles, replay and display settings. The creation wizard orders problems and assigns letters, selects participants and rules, then presents a review. Settings show a LAN address and locally generated QR code. Launchers detect the LAN address; set `CODEARENA_LAN_HOST` or enter the correct address in the UI when the server has several interfaces.
+
+For CSV team provisioning, use the exact header `team_name,organization,member1,member2,member3`, with one team per row and one to three members. Import creates individual student accounts immediately and returns a downloadable credential CSV once. Save and distribute it privately. Each member signs in separately; team submissions and standings are shared. Cancelling the contest wizard does not delete already provisioned accounts.
+
+### Public display, freeze and reveal
+
+Public access is **disabled by default**. An organizer can enable it in contest settings. Projector URLs are `/display/contests/<id>/scoreboard` and `/display/contests/<id>/puzzles`; they need no login while enabled. They expose visible participant/team names and standings, never source code, hidden tests or delivery records. Disable public access to revoke HTTP and WebSocket access.
+
+Scheduled freeze activates at the configured time. Jury standings remain complete; public standings and public puzzle collections use the same frozen projection. After the contest finishes and judging/rejudge admission completes, reveal pending cells from the bottom of the standings, manually or automatically at a chosen speed. Revealed cells persist across refresh. Unfreeze separately when ready to publish everything.
+
+Replay reconstructs standings from submission and judgement timestamps without running code again. Organizers can replay a finished contest while its public results remain frozen. Accuracy depends on stored timestamps and rejudge history; events predating this release are not fabricated as an original live timeline.
+
+### Puzzles and rejudging
+
+An official acceptance awards one puzzle piece per participant/team and problem. Repeated acceptance cannot duplicate it. The mobile delivery desk records who delivered a piece and when. It requires the contest owner or an administrator; there is no separate volunteer role or anonymous delivery link. An optional PNG/JPEG/WebP final image (500 KB, 4 megapixels maximum) is decoded, resized and re-encoded before storage.
+
+Rejudging retains previous judgements for replay and audit. Use a single submission, a problem or the entire contest; durable batches feed the bounded queue as capacity becomes available. Batch progress counts submissions admitted to the queue, not completed judgements. Check queued/running jobs before declaring judging finished. Problem updates offer a rejudge choice; saving a problem and requesting batches are separate operations, so inspect any reported batch error in the control center.
+
+If rejudging removes a solve, its piece is marked revoked while delivery history remains. A later acceptance reactivates the same piece. Existing acceptances are reconciled into reward records on worker startup. Problem packages still use the validated JSON-manifest ZIP format; a dedicated adapter separates parsing from persistence, but Polygon/YAML packages, custom checkers and solution-driven test generation are not implemented.
+
 ## Scoring
 
 | Mode | Ranking |
@@ -52,9 +75,21 @@ In Groups, administrators and the owning teacher can reset passwords, delete gro
 | Individual/team educational ICPC | Most solved; no time/rejection penalties; equal results share rank |
 | Partial credit | Best percentage per problem, summed; equal points share rank |
 
-A solved ICPC problem contributes elapsed whole minutes at first acceptance plus 20 minutes per earlier penalized rejection. Compilation errors, system errors, Run, practice and attempts after acceptance do not add penalties. Unsolved problems add no time. Pauses are excluded. Cells display the time/penalty breakdown.
+A solved ICPC problem contributes elapsed whole minutes at first acceptance plus the configured penalty per earlier penalized rejection (20 minutes by default). Compilation errors, system errors, Run, practice and attempts after acceptance do not add penalties. Unsolved problems add no time. Pauses are excluded. Cells display the time/penalty breakdown.
 
 Partial credit is **100 × passed test weight / total test weight**. All eligible tests run unless infrastructure limits fail. System errors yield no points. This is weighted per-test scoring, not dependency-based IOI subtasks. Ranking follows the [World Finals scoring rules](https://wf.icpc.global/2026/about/); this is not an officially certified ICPC system.
+
+## Documents, external problems and code review
+
+Teachers can attach up to three PDF/DOCX documents (5 MB each) after saving a problem. Documents live in SQLite and verified backups. Downloads require the same contest access as the statement, use attachment disposition, and never expose hidden tests. Upload/delete is locked during active contests. DOCX archives have size/member bounds; macros, embedded objects and encrypted archives are rejected. Uploaded documents are not virus-scanned or converted; downloads retain their original content.
+
+**Problem bank ? Import from URL** supports Codeforces, AtCoder and CSES public problem pages. Preview and review the imported statement, formulas, limits and sample pairs before saving; add your own hidden tests. Source attribution remains in the statement. Codeforces may refuse automated fetching: save the public HTML page in your browser and supply that file alongside its URL. The importer does not bypass challenges or retrieve hidden tests. Server fetching uses fixed HTTPS origins, validated public addresses, pinned connections, bounded responses and no redirects. Import only material you are permitted to reuse.
+
+Submission details provide an organizer-only **Comment review** panel. It reports exact lines containing explicit assistant attribution, assistant self-description or embedded instructions. It is a deterministic review aid, not an AI authorship classifier: ordinary comments are not suspicious by themselves; markers can be edited, quoted or misleading. No probability, automatic misconduct decision, verdict change or penalty is generated. Student code is not sent to an external AI service.
+
+### Managed classroom network
+
+A website cannot disable a student's operating-system internet access. Control center settings provide a downloadable Windows administrator script for **managed school PCs**. It is never executed remotely by CodeArena. Read [network operation](docs/CLASSROOM_NETWORK.md) before using it. It adds temporary outbound firewall restrictions while retaining access to a literal private IPv4 CodeArena server, with scheduled automatic restoration and an explicit restore command. This is not a browser toggle, kiosk system or protection against local administrators/secondary devices.
 
 ## Languages
 
@@ -63,8 +98,11 @@ Partial credit is **100 × passed test weight / total test weight**. All eligibl
 | Python 3.12 | CPython 3.12 | main.py |
 | C++20 | GCC 12, -std=c++20 -O2 | main.cpp |
 | Java 17 | OpenJDK 17, --release 17 | Main.java, public class Main |
+| JavaScript | Debian Node.js 18, CommonJS | main.js; read stdin with fs.readFileSync(0, "utf8") |
+| Go | Debian Go 1.19, no module downloads, CGO disabled | main.go, package main |
+| C# | Mono 6.8 / mcs; not modern .NET | Main.cs, static Main entry point |
 
-Versions are provided by the sandbox image. C++/Java compile once per judgement; bounded artifacts travel to fresh test containers and never execute on the host. Compiler budget: 10 seconds / 512 MB. Java JVM overhead counts toward memory limits; use at least 128 MB for normal Java tasks. See [judge operation](backend/judge/README.md).
+Versions are provided by the sandbox image. C++/Java compile once per judgement; bounded artifacts travel to fresh test containers and never execute on the host. Compiler budget: 10 seconds / 512 MB. Compiled artifacts are bounded to 4 MB (6 MB encoded transport); runtime stdout/stderr remain limited to 256 KB. Java JVM overhead counts toward memory limits; use at least 128 MB for normal Java tasks. Choose allowed languages in the wizard or contest settings outside an active contest. Existing contests keep their language selection. JavaScript and Go include runtime overhead; 128?256 MB is a practical starting point. See [judge operation](backend/judge/README.md).
 
 ## Configuration and operation
 
@@ -121,7 +159,7 @@ docker compose run --rm --no-deps api python -m app.migrate
 docker compose up -d
 ```
 
-Migration 0003 preserves accounts, submissions and test results. Existing contests default to individual ICPC with practice disabled. Pre-Alembic databases require a separate converter.
+Migrations preserve accounts, submissions and test results. Migration 0005 adds contest operations tables and settings; migration 0006 adds document storage. Existing contests keep their modes and language selection, and public display stays disabled. Pre-Alembic databases require a separate converter.
 
 ## Development and tests
 
@@ -160,7 +198,7 @@ python tools/classroom_load.py --students 30 --output reports/classroom-load.jso
 
 This uses a temporary database, concurrent API handlers and real Docker judging. It measures admission/queue/verdict latency and verifies restoration. HTTP uses TestClient: network, TLS and browser rendering are not measured. Results depend on hardware/workload. See [performance notes](docs/PERFORMANCE.md).
 
-Tests cover scoring/ties, team boundaries, practice isolation, editorial release, feedback permissions, all three languages, sandbox constraints, lease recovery and migration data preservation. Real-browser/accessibility review remains a release requirement.
+Tests cover scoring/ties, team boundaries, practice isolation, editorial release, feedback permissions, all three languages, sandbox constraints, lease recovery and migration data preservation. The isolated Edge smoke test covers desktop control, the wizard, QR settings, replay, mobile puzzle delivery and public displays. Full keyboard/screen-reader accessibility review remains a release requirement. To reproduce browser checks, install `playwright`, build the frontend and run `python tools/browser_smoke.py` with Microsoft Edge installed. Screenshots are written to ignored `artifacts/contest-ui/`; real contest data is untouched.
 
 ## Architecture and scope
 
@@ -172,6 +210,6 @@ Browser -> FastAPI routes -> policy/services -> SQLite WAL
                                 Docker sandboxes    verified copies
 ```
 
-See [architecture](docs/ARCHITECTURE.md), [security policies](docs/SECURITY.md) and [institutional roadmap](docs/ROADMAP.md). Future priorities include SSO/LMS, off-host backup automation, accessibility review and richer assignments. This deployment remains SQLite-only with one API and one worker.
+See [architecture](docs/ARCHITECTURE.md), [security policies](docs/SECURITY.md) and [institutional roadmap](docs/ROADMAP.md). Future priorities include scoped volunteer access, wider problem-package compatibility, off-host backup automation and accessibility review. This deployment remains SQLite-only with one API and one worker.
 
 Containers share the host kernel; the Docker socket is an administrative boundary. Public multi-tenant operation needs dedicated judging infrastructure and independent security review. This release does not claim multi-institution isolation or high availability.

@@ -31,10 +31,14 @@ def enqueue_submission(db, req, user):
                 "language",
                 "custom_input",
             )
-            if existing.is_practice != req.practice or any(getattr(existing, key) != getattr(req, key) for key in fields):
+            if existing.is_practice != req.practice or any(
+                getattr(existing, key) != getattr(req, key) for key in fields
+            ):
                 raise HTTPException(409, "IDEMPOTENCY_CONFLICT")
             return existing
     policy = execution_policy(db, c, practice=req.practice)
+    if req.language not in (c.languages or ["python3", "cpp20", "java17"]):
+        raise HTTPException(422, "Language is disabled for this contest")
     if not policy["allowed"]:
         raise HTTPException(
             503 if policy["reason"] == "JUDGE_UNAVAILABLE" else 403, policy["reason"]
@@ -48,7 +52,9 @@ def enqueue_submission(db, req, user):
         db,
         f"{req.kind}:{user.id}",
         1,
-        float(os.getenv(req.kind + "_COOLDOWN_SECONDS", "2" if req.kind == "RUN" else "5")),
+        float(
+            os.getenv(req.kind + "_COOLDOWN_SECONDS", "2" if req.kind == "RUN" else "5")
+        ),
     )
     pending = db.scalar(
         select(func.count())
@@ -70,7 +76,12 @@ def enqueue_submission(db, req, user):
         select(TestCase).where(TestCase.problem_id == p.id).order_by(TestCase.ordinal)
     ).all()
     selected = [
-        {"input_data": t.input_data, "expected": t.expected, "is_sample": t.is_sample, "weight": t.weight}
+        {
+            "input_data": t.input_data,
+            "expected": t.expected,
+            "is_sample": t.is_sample,
+            "weight": t.weight,
+        }
         for t in tests
         if req.kind == "SUBMIT" or t.is_sample
     ]
@@ -98,8 +109,25 @@ def enqueue_submission(db, req, user):
     )
     db.add(s)
     db.flush()
-    audit(db, user, "submission.created", s.id)
+    audit(
+        db,
+        user,
+        "submission.created",
+        s.id,
+        {
+            "problem_id": s.problem_id,
+            "team_id": s.team_id,
+            "kind": s.kind,
+            "practice": s.is_practice,
+        },
+        contest_id=c.id,
+    )
     db.commit()
-    event("queue.admitted", submission_id=s.id, kind=s.kind, language=s.language,
-          source_hash=hashlib.sha256(s.source.encode()).hexdigest())
+    event(
+        "queue.admitted",
+        submission_id=s.id,
+        kind=s.kind,
+        language=s.language,
+        source_hash=hashlib.sha256(s.source.encode()).hexdigest(),
+    )
     return s

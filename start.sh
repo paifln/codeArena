@@ -2,6 +2,10 @@
 set -eu
 cd "$(dirname "$0")"
 docker info >/dev/null
+if [ -z "${CODEARENA_LAN_HOST:-}" ] && command -v hostname >/dev/null 2>&1; then
+  CODEARENA_LAN_HOST=$(hostname -I 2>/dev/null | awk '{print $1}')
+  export CODEARENA_LAN_HOST
+fi
 if [ -z "${DOCKER_GID:-}" ] && [ -S /var/run/docker.sock ]; then
   DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
   export DOCKER_GID

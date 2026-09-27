@@ -28,7 +28,7 @@ def test_initial_schema_roundtrip(tmp_path):
             "audit_logs",
         } <= tables
         assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0004",
+            "0006",
         )
         assert "request_id" in {
             r[1] for r in db.execute("PRAGMA table_info(submissions)")

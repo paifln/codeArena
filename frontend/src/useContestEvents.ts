@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { api } from "./api";
 
 /** WebSocket is an invalidation hint; REST remains the source of truth. */
 export function useContestEvents(id: string | undefined) {
@@ -12,6 +13,10 @@ export function useContestEvents(id: string | undefined) {
     let retry: ReturnType<typeof setTimeout> | undefined;
     let delay = 1000;
     let previous = "";
+    let lastInvalidation = 0;
+    const presence = () => api(`/contests/${id}/presence`, {}).catch(() => {});
+    presence();
+    const heartbeat = setInterval(presence, 20000);
     const connect = () => {
       if (stopped) return;
       socket = new WebSocket(
@@ -27,6 +32,8 @@ export function useContestEvents(id: string | undefined) {
           const { server_time: _, ...payload } = JSON.parse(event.data);
           const signature = JSON.stringify(payload);
           if (signature === previous) return;
+          if (Date.now() - lastInvalidation < 5000) return;
+          lastInvalidation = Date.now();
           previous = signature;
           query.invalidateQueries({
             predicate: (q) => {
@@ -38,6 +45,10 @@ export function useContestEvents(id: string | undefined) {
                   "monitor",
                   "submission",
                   "dashboard",
+                  "control",
+                  "puzzles",
+                  "public-board",
+                  "replay",
                 ].includes(key) ||
                 key.startsWith("/submissions") ||
                 key.startsWith(`/contests/${id}/`) ||
@@ -61,6 +72,7 @@ export function useContestEvents(id: string | undefined) {
     return () => {
       stopped = true;
       if (retry) clearTimeout(retry);
+      clearInterval(heartbeat);
       socket?.close();
     };
   }, [id, query]);

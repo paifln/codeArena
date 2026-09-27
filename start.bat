@@ -6,6 +6,7 @@ if errorlevel 1 (
   echo Start Docker Desktop with Linux containers, then try again.
   exit /b 1
 )
+if not defined CODEARENA_LAN_HOST for /f "delims=" %%i in ('powershell -NoProfile -Command "$n = @(Get-NetIPConfiguration).Where({$_.IPv4DefaultGateway}); if($n.Count){$n[0].IPv4Address.IPAddress}"') do set CODEARENA_LAN_HOST=%%i
 docker compose up --build -d
 if errorlevel 1 exit /b 1
 if not defined PORT set PORT=8000

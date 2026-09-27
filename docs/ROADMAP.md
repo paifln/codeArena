@@ -1,6 +1,6 @@
 # School and university launch roadmap
 
-Version 3.1 includes teams, educational mode, weighted points, C++/Java, practice, editorials, feedback, operations monitoring and verified local backups. See PERFORMANCE.md for the 30-student baseline. Remaining work is listed below; this is not a certification or capacity claim.
+Version 3.2 adds contest control, public displays, reveal/replay, puzzle rewards and bulk rejudging to the existing local contest platform. See PERFORMANCE.md for the 30-student baseline. Remaining work is listed below; this is not a certification or capacity claim.
 
 ## P0: before the first real assessment
 
@@ -14,19 +14,18 @@ Version 3.1 includes teams, educational mode, weighted points, C++/Java, practic
 | Define data handling | Institution approves collected fields, retention/deletion, access to student code, backup retention and incident contacts |
 | Review accessibility | Test editor and complete flows with keyboard, screen reader, zoom and contrast against [WCAG 2.2](https://www.w3.org/TR/WCAG22/) |
 
-## P1: routine teaching
+## P1: routine contests
 
 - Invitation/account recovery flows, password change on first login, validated roster import and offboarding. Add a visible clear-drafts action for shared devices.
-- Courses/terms, reusable assignments, standalone practice collections, deadlines and richer gradebook exports.
+- Scoped volunteer accounts, printable puzzle delivery slips and wider validated problem-package compatibility.
 - Extend existing operations monitoring with retained metrics, external alert delivery and service targets. Avoid logging passwords or source.
 - Automated encrypted off-host backups and scheduled restoration checks with an accountable operator.
-- Institutional SSO and LMS integration. Evaluate [LTI 1.3 / LTI Advantage](https://www.imsglobal.org/lti-advantage-overview) for assignment launch and membership/grade exchange; prototype with the actual institutional LMS.
 - Real-browser regression tests with Monaco, multiple accounts, expired sessions, teacher resume and unreliable networks.
 
 ## P2: expand after measured demand
 
 - Repeat capacity tests and tune bounded slots/quotas within the single-worker SQLite deployment.
-- Institution/course ownership enforced throughout queries and exports before multi-institution hosting.
+- Institution ownership enforced throughout queries and exports before multi-institution hosting.
 - Additional runtime versions and JavaScript, with language-specific resource tests.
 - Dependency-based subtasks beyond existing weighted per-test scoring.
 - Code-similarity reports as teacher review aids, with evidence and student appeals; no automatic similarity penalties.

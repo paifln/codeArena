@@ -26,6 +26,8 @@ services:
       SUBMIT_COOLDOWN_SECONDS: ${SUBMIT_COOLDOWN_SECONDS:-5}
       MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-200}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      CODEARENA_LAN_HOST: ${CODEARENA_LAN_HOST:-}
+      PUBLIC_PORT: ${PORT:-8000}
     volumes:
       - arena-data:/data
       - ./backups:/backups:ro

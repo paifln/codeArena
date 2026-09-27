@@ -1,3 +1,8 @@
+import {
+  ProblemDocuments,
+  ImportProblem,
+} from "./features/contest/ProblemDocuments";
+import { ContestWizard } from "./features/contest/ContestWizard";
 import { ContestOptions, defaultOptions } from "./components/ContestOptions";
 import {
   PeopleActionDialog,
@@ -189,118 +194,8 @@ export function Dashboard() {
     </>
   );
 }
-function ContestForm({ close }: { close: () => void }) {
-  const { t } = useTranslation();
-  const nav = useNavigate();
-  const q = useQueryClient();
-  const a = useAction();
-  const [options, setOptions] = useState(defaultOptions);
-  const problems = useList("/problems");
-  const groups = useList("/groups");
-  const [pids, setPids] = useState<number[]>([]);
-  const [gids, setGids] = useState<number[]>([]);
-  const toggle = (list: number[], id: number) =>
-    list.includes(id) ? list.filter((v) => v !== id) : [...list, id];
-  const date = (offset: number) => {
-    const d = new Date(Date.now() + offset);
-    return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 16);
-  };
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        const f = new FormData(e.currentTarget);
-        a.execute(async () => {
-          const c = await api("/contests", {
-            ...options,
-            title: f.get("title"),
-            description: f.get("description"),
-            start_time: new Date(String(f.get("start"))).toISOString(),
-            end_time: new Date(String(f.get("end"))).toISOString(),
-            problem_ids: pids,
-            group_ids: options.mode === "TEAM" ? [] : gids,
-            participant_ids: [],
-            scoreboard_enabled: f.get("scoreboard") === "on",
-          });
-          q.invalidateQueries({ queryKey: ["/contests"] });
-          close();
-          nav(`/contests/${c.id}`);
-        });
-      }}
-    >
-      <Field label={t("title")}>
-        <input name="title" required maxLength={180} />
-      </Field>
-      <Field label={t("description")}>
-        <textarea name="description" rows={3} />
-      </Field>
-      <div className="form-grid">
-        <Field label={t("startTime")}>
-          <input
-            type="datetime-local"
-            name="start"
-            required
-            defaultValue={date(300000)}
-          />
-        </Field>
-        <Field label={t("endTime")}>
-          <input
-            type="datetime-local"
-            name="end"
-            required
-            defaultValue={date(7500000)}
-          />
-        </Field>
-      </div>
-      <ContestOptions value={options} onChange={setOptions} />
-      <h3>{t("selectProblems")}</h3>
-      <div className="selection-list">
-        {problems.data?.map((p) => (
-          <label key={p.id} className="check-row">
-            <input
-              type="checkbox"
-              checked={pids.includes(p.id)}
-              onChange={() => setPids(toggle(pids, p.id))}
-            />
-            <span>{p.title}</span>
-            <Badge value={p.difficulty} />
-          </label>
-        ))}
-        {!problems.data?.length && <p className="muted">{t("noProblems")}</p>}
-      </div>
-      {options.mode !== "TEAM" && (
-        <>
-          <h3>{t("assignGroups")}</h3>
-          <div className="selection-list">
-            {groups.data?.map((g) => (
-              <label key={g.id} className="check-row">
-                <input
-                  type="checkbox"
-                  checked={gids.includes(g.id)}
-                  onChange={() => setGids(toggle(gids, g.id))}
-                />
-                {g.name}
-              </label>
-            ))}
-          </div>
-        </>
-      )}
-      <label className="check-row">
-        <input type="checkbox" name="scoreboard" defaultChecked />
-        {t("showScoreboard")}
-      </label>
-      <ErrorBox error={a.error} />
-      <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={close}>
-          {t("cancel")}
-        </Button>
-        <Button disabled={a.busy || !pids.length}>{t("create")}</Button>
-      </div>
-    </form>
-  );
-}
+const ContestForm = ContestWizard;
+
 export function Contests() {
   const { t } = useTranslation();
   const teacher = useSession((s) => s.user?.role) !== "STUDENT";
@@ -395,6 +290,12 @@ function ProblemForm({
   );
   const [desc, setDesc] = useState(existing?.description || "");
   const [preview, setPreview] = useState(false);
+  const [rejudgeMode, setRejudgeMode] = useState("none");
+  const usage = useQuery({
+    queryKey: ["problem-usage", existing?.id],
+    queryFn: () => api(`/problems/${existing.id}/usage`),
+    enabled: !!existing?.id,
+  });
   return (
     <form
       onSubmit={(e) => {
@@ -402,7 +303,7 @@ function ProblemForm({
         const f = new FormData(e.currentTarget);
         a.execute(async () => {
           await api(
-            existing ? `/problems/${existing.id}` : "/problems",
+            existing?.id ? `/problems/${existing.id}` : "/problems",
             {
               title: f.get("title"),
               description: desc,
@@ -418,13 +319,33 @@ function ProblemForm({
                 .filter(Boolean),
               tests,
             },
-            existing ? "PATCH" : "POST",
+            existing?.id ? "PATCH" : "POST",
           );
+          if (existing?.id && rejudgeMode !== "none")
+            for (const contest of usage.data?.contests || [])
+              await api(`/contests/${contest.id}/rejudge`, {
+                problem_id: existing.id,
+                affected_only: rejudgeMode === "affected",
+              });
           q.invalidateQueries({ queryKey: ["/problems"] });
           close();
         });
       }}
     >
+      {usage.data?.count > 0 && (
+        <div className="notice warning">
+          <p>{t("existingSubmissions", { count: usage.data.count })}</p>
+          <select
+            aria-label={t("rejudge")}
+            value={rejudgeMode}
+            onChange={(e) => setRejudgeMode(e.target.value)}
+          >
+            <option value="none">{t("noRejudge")}</option>
+            <option value="affected">{t("rejudgeAffected")}</option>
+            <option value="all">{t("rejudgeProblem")}</option>
+          </select>
+        </div>
+      )}
       <Field label={t("title")}>
         <input
           name="title"
@@ -468,6 +389,19 @@ function ProblemForm({
           />
         </Field>
       </div>
+      {existing?.review_required && (
+        <p className="notice warning">{t("importReview")}</p>
+      )}
+      {existing?.id ? (
+        <ProblemDocuments
+          key={existing.id}
+          problemId={existing.id}
+          documents={existing.documents}
+          editable
+        />
+      ) : (
+        <p className="muted">{t("documentsSave")}</p>
+      )}
       <Field label={t("editorial")}>
         <textarea
           name="editorial"
@@ -638,6 +572,7 @@ function ProblemForm({
   );
 }
 export function Problems() {
+  const [importing, setImporting] = useState(false);
   const { t } = useTranslation();
   const list = useList("/problems");
   const [editing, setEditing] = useState<any>(null);
@@ -646,6 +581,9 @@ export function Problems() {
   return (
     <>
       <Heading title={t("problems")} subtitle={t("testHint")}>
+        <Button variant="secondary" onClick={() => setImporting(true)}>
+          {t("importExternal")}
+        </Button>
         <Button onClick={() => setEditing({})}>
           <Plus size={17} />
           {t("newProblem")}
@@ -732,15 +670,24 @@ export function Problems() {
         )}
       </div>
       <Modal
+        open={importing}
+        onClose={() => setImporting(false)}
+        title={t("importExternal")}
+      >
+        <ImportProblem
+          onImported={(value) => {
+            setImporting(false);
+            setEditing(value);
+          }}
+        />
+      </Modal>
+      <Modal
         open={editing !== null}
         onClose={() => setEditing(null)}
         title={t(editing?.id ? "editProblem" : "newProblem")}
       >
         {editing !== null && (
-          <ProblemForm
-            existing={editing.id ? editing : undefined}
-            close={() => setEditing(null)}
-          />
+          <ProblemForm existing={editing} close={() => setEditing(null)} />
         )}
       </Modal>
     </>

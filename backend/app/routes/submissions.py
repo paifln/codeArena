@@ -1,7 +1,6 @@
 from ..services.submission_queue import enqueue_submission
-import time
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, delete, or_
+from sqlalchemy import select, or_
 from sqlalchemy.orm import Session as DBSession
 from ..db import get_db, lock_write
 from ..models import (
@@ -9,7 +8,6 @@ from ..models import (
     Problem,
     Submission,
     SubmissionTestResult,
-    TestCase,
     User,
 )
 from .. import schemas as S
@@ -33,7 +31,12 @@ def submission_public(db, s, u, detail=False):
             "user_id",
             "problem_id",
             "contest_id",
-            "kind", "language", "team_id", "is_practice", "score", "feedback",
+            "kind",
+            "language",
+            "team_id",
+            "is_practice",
+            "score",
+            "feedback",
             "status",
             "time_ms",
             "memory_kb",
@@ -77,6 +80,9 @@ def submission_public(db, s, u, detail=False):
         ]
         if privileged:
             data["history"] = s.history
+            from ..services.code_review import comment_review
+
+            data["code_review"] = comment_review(s.source, s.language)
     return data
 
 
@@ -92,6 +98,11 @@ def submissions(
     contest_id: int | None = None,
     problem_id: int | None = None,
     status: str | None = None,
+    team_id: int | None = None,
+    language: str | None = None,
+    after: float | None = None,
+    before: float | None = None,
+    offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     user=Depends(current_user),
     db: DBSession = Depends(get_db),
@@ -101,7 +112,12 @@ def submissions(
         c = access_contest(db, contest_id, user)
         q = q.where(Submission.contest_id == c.id)
         if not manager(c, user):
-            q = q.where(or_(Submission.user_id == user.id, Submission.team_id == (team_id_for(db, c.id, user.id) or -1)))
+            q = q.where(
+                or_(
+                    Submission.user_id == user.id,
+                    Submission.team_id == (team_id_for(db, c.id, user.id) or -1),
+                )
+            )
     elif user.role == "STUDENT":
         q = q.where(Submission.user_id == user.id)
     elif user.role == "TEACHER":
@@ -110,6 +126,14 @@ def submissions(
                 select(Contest.id).where(Contest.author_id == user.id)
             )
         )
+    if team_id:
+        q = q.where(Submission.team_id == team_id)
+    if language:
+        q = q.where(Submission.language == language)
+    if after is not None:
+        q = q.where(Submission.created_at >= after)
+    if before is not None:
+        q = q.where(Submission.created_at <= before)
     if problem_id:
         q = q.where(Submission.problem_id == problem_id)
     if status:
@@ -117,7 +141,9 @@ def submissions(
     return [
         submission_public(db, s, user)
         for s in db.scalars(
-            q.order_by(Submission.created_at.desc(), Submission.id.desc()).limit(limit)
+            q.order_by(Submission.created_at.desc(), Submission.id.desc())
+            .offset(offset)
+            .limit(limit)
         )
     ]
 
@@ -144,53 +170,19 @@ def rejudge(sid: int, user=Depends(teacher), db: DBSession = Depends(get_db)):
         raise HTTPException(409, "Already queued")
     if not judge_status(db)["judge_available"]:
         raise HTTPException(503, "Sandbox unavailable")
-    s.history = [
-        *(s.history or []),
-        {
-            "status": s.status, "score": s.score,
-            "finished_at": s.finished_at,
-            "time_ms": s.time_ms,
-            "version": s.problem_snapshot.get("version"),
-            "rejudged_at": time.time(),
-        },
-    ]
-    p = db.get(Problem, s.problem_id)
-    tests = db.scalars(
-        select(TestCase).where(TestCase.problem_id == p.id).order_by(TestCase.ordinal)
-    ).all()
-    s.problem_snapshot = {
-        "version": p.version,
-        "scoring": s.problem_snapshot.get("scoring", "ICPC"),
-        "time_limit": p.time_limit,
-        "mem_limit": p.mem_limit,
-        "tests": [
-            {
-                "input_data": t.input_data,
-                "expected": t.expected,
-                "is_sample": t.is_sample, "weight": t.weight,
-            }
-            for t in tests
-            if s.kind == "SUBMIT" or t.is_sample
-        ],
-    }
-    s.status = "QUEUED"
-    s.started_at = None
-    s.finished_at = None
-    s.lease_token = None
-    s.attempt_count = 0
-    s.error = ""
-    s.time_ms = 0
-    s.score = 0
-    db.execute(
-        delete(SubmissionTestResult).where(SubmissionTestResult.submission_id == sid)
-    )
-    audit(db, user, "submission.rejudge", sid)
+    from ..services.rejudging import reset_submission, capacity
+
+    if capacity(db) <= 0:
+        raise HTTPException(429, "Judge queue is full")
+    reset_submission(db, s, user)
     db.commit()
     return submission_public(db, s, user)
 
 
 @router.patch("/submissions/{sid}/feedback")
-def feedback(sid: int, req: S.FeedbackIn, user=Depends(teacher), db: DBSession = Depends(get_db)):
+def feedback(
+    sid: int, req: S.FeedbackIn, user=Depends(teacher), db: DBSession = Depends(get_db)
+):
     lock_write(db)
     s = db.get(Submission, sid)
     if not s:

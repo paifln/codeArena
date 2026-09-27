@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -22,6 +24,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+
 @asynccontextmanager
 async def lifespan(app):
     settings()  # Fail closed when the signing key/configuration is absent or invalid.
@@ -29,7 +32,9 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="CodeArena", version="3.1.0", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(
+    title="CodeArena", version="3.3.0", lifespan=lifespan, docs_url=None, redoc_url=None
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -79,14 +84,22 @@ async def response_security(request, call_next):
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["Strict-Transport-Security"] = "max-age=31536000"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        ),
     )
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     if response.status_code >= 400:
         route = request.scope.get("route")
-        event("http.error", method=request.method, route=getattr(route, "path", "unmatched"), status=response.status_code)
+        event(
+            "http.error",
+            method=request.method,
+            route=getattr(route, "path", "unmatched"),
+            status=response.status_code,
+        )
     return response
 
 
@@ -115,9 +128,27 @@ async def safe_error(request, exc):
     return JSONResponse({"detail": "Internal service error"}, status_code=500)
 
 
-from .routes import auth, users, problems, contests, submissions, communication, operations
+from .routes import (
+    auth,
+    users,
+    problems,
+    contests,
+    submissions,
+    communication,
+    operations,
+    control_center,
+)
 
-for route in (auth, users, problems, contests, submissions, communication, operations):
+for route in (
+    auth,
+    users,
+    problems,
+    contests,
+    submissions,
+    communication,
+    operations,
+    control_center,
+):
     app.include_router(route.router, prefix="/api/v1")
 
 
@@ -144,6 +175,20 @@ async def contest_ws(ws: WebSocket, cid: int):
             if not u or not u.active:
                 raise HTTPException(401)
             c = access_contest(db, cid, u)
+            from .models import AuditLog
+            from .services.scoreboard import freeze_cutoff
+            from .services.scoreboard import scoreboard
+
+            visible_revision = None
+            if c.scoreboard_enabled and contest_status(c) in (
+                "RUNNING",
+                "PAUSED",
+                "FINISHED",
+            ):
+                board = scoreboard(db, c, u)
+                visible_revision = hashlib.sha256(
+                    json.dumps(board["rows"], sort_keys=True).encode()
+                ).hexdigest()
             q = select(Submission.id, Submission.status).where(
                 Submission.contest_id == cid
             )
@@ -167,7 +212,14 @@ async def contest_ws(ws: WebSocket, cid: int):
                 "status": contest_status(c),
                 "execution": execution_policy(db, c),
                 "end_time": iso(c.end_time),
-                "frozen": c.freeze_at is not None,
+                "frozen": freeze_cutoff(c) is not None,
+                "revision": db.scalar(
+                    select(func.max(AuditLog.id)).where(AuditLog.contest_id == cid)
+                )
+                if manager(c, u)
+                else None,
+                "reveal_revision": len(c.revealed_ids or []),
+                "standings_revision": visible_revision,
                 "server_time": iso(time.time()),
                 "submissions": subs,
                 "announcement_count": db.scalar(
@@ -185,6 +237,43 @@ async def contest_ws(ws: WebSocket, cid: int):
         while True:
             await asyncio.sleep(2)
             await ws.send_json(await asyncio.to_thread(snapshot))
+    except HTTPException:
+        await ws.close(code=4403)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+
+
+@app.websocket("/ws/public/contests/{cid}")
+async def public_contest_ws(ws: WebSocket, cid: int):
+    expected = (
+        ("https" if ws.url.scheme == "wss" else "http")
+        + "://"
+        + ws.headers.get("host", "")
+    )
+    if ws.headers.get("origin") not in set(origins) | {expected}:
+        await ws.close(code=4403)
+        return
+
+    def public_snapshot():
+        from .routes.control_center import public_contest
+        from .services.scoreboard import scoreboard
+
+        with SessionLocal() as db:
+            board = scoreboard(db, public_contest(db, cid), public=True)
+            board.pop("server_time", None)
+            return {
+                "revision": hashlib.sha256(
+                    json.dumps(board, sort_keys=True).encode()
+                ).hexdigest()
+            }
+
+    try:
+        first = await asyncio.to_thread(public_snapshot)
+        await ws.accept()
+        await ws.send_json(first)
+        while True:
+            await asyncio.sleep(3)
+            await ws.send_json(await asyncio.to_thread(public_snapshot))
     except HTTPException:
         await ws.close(code=4403)
     except (WebSocketDisconnect, RuntimeError):

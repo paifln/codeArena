@@ -3,15 +3,40 @@ import json
 import secrets
 import zipfile
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session as DBSession
 from ..db import get_db, lock_write
-from ..models import Contest, ContestProblem, Problem, TestCase
+from ..models import (
+    Contest,
+    ContestProblem,
+    Problem,
+    TestCase,
+    Submission,
+    ProblemDocument,
+)
 from .. import schemas as S
 from ..security import current_user, teacher, owned
 from ..services import access_contest, audit, contest_status, problem_public
 
 router = APIRouter()
+
+
+@router.get("/problems/{pid}/usage")
+def problem_usage(pid: int, user=Depends(teacher), db: DBSession = Depends(get_db)):
+    owned(db.get(Problem, pid), user)
+    query = (
+        select(Contest.id, Contest.title, func.count(Submission.id))
+        .join(Submission, Submission.contest_id == Contest.id)
+        .where(Submission.problem_id == pid)
+        .group_by(Contest.id)
+    )
+    if user.role != "ADMIN":
+        query = query.where(Contest.author_id == user.id)
+    rows = [
+        {"id": cid, "title": title, "count": count}
+        for cid, title, count in db.execute(query)
+    ]
+    return {"count": sum(r["count"] for r in rows), "contests": rows}
 
 
 @router.get("/problems")
@@ -147,51 +172,115 @@ async def import_problem(
     blob = await file.read(1_000_001)
     if len(blob) > 1_000_000:
         raise HTTPException(413, "Archive too large")
+    from ..services.problem_packages import read_package
+
     try:
-        with zipfile.ZipFile(io.BytesIO(blob)) as z:
-            infos = z.infolist()
-            if len(infos) > 104 or sum(i.file_size for i in infos) > 1_000_000:
-                raise ValueError()
-            names = [i.filename for i in infos]
-            if len(set(names)) != len(names):
-                raise ValueError()
-            for i in infos:
-                if (
-                    i.filename.startswith(("/", "\\"))
-                    or "\\" in i.filename
-                    or ":" in i.filename
-                    or ".." in i.filename.split("/")
-                    or i.flag_bits & 1
-                    or (i.external_attr >> 16) & 0o170000 == 0o120000
-                ):
-                    raise ValueError()
-                if i.file_size > max(i.compress_size, 1) * 100:
-                    raise ValueError()
-            data = json.loads(z.read("problem.json"))
-            # Count references too: a small archive must not expand into an
-            # unbounded list by referring to the same large member repeatedly.
-            entries = data.get("tests")
-            if not isinstance(entries, list) or not 1 <= len(entries) <= 50:
-                raise ValueError()
-            by_name = {i.filename: i for i in infos}
-            referenced_size = sum(
-                by_name[t[key]].file_size
-                for t in entries
-                for key in ("input", "output")
-            )
-            if referenced_size > 512_000:
-                raise ValueError()
-            data["description"] = z.read("statement.md").decode("utf-8")
-            data["tests"] = [
-                {
-                    "input_data": z.read(t["input"]).decode("utf-8"),
-                    "expected": z.read(t["output"]).decode("utf-8"),
-                    "is_sample": t.get("is_sample", False),
-                    "weight": t.get("weight", 1),
-                }
-                for t in data["tests"]
-            ]
-            req = S.ProblemIn.model_validate(data)
-    except Exception:
-        raise HTTPException(400, "Invalid or unsafe problem archive")
+        req = read_package(blob)
+    except ValueError:
+        raise HTTPException(400, "Invalid or unsafe problem archive") from None
     return save_problem(db, req, user)
+
+
+def document_owner(db, pid, user):
+    p = owned(db.get(Problem, pid), user)
+    contests = db.scalars(
+        select(Contest)
+        .join(ContestProblem, ContestProblem.contest_id == Contest.id)
+        .where(ContestProblem.problem_id == pid)
+    ).all()
+    if any(contest_status(c) in ("RUNNING", "PAUSED") for c in contests):
+        raise HTTPException(409, "Documents are locked during an active contest")
+    return p
+
+
+@router.post("/problems/{pid}/documents", status_code=201)
+async def upload_document(
+    pid: int,
+    file: UploadFile = File(...),
+    user=Depends(teacher),
+    db: DBSession = Depends(get_db),
+):
+    from ..services.problem_documents import validate_document, MAX_DOCUMENT
+
+    document_owner(db, pid, user)
+    blob = await file.read(MAX_DOCUMENT + 1)
+    try:
+        name, media_type = validate_document(file.filename, blob)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    lock_write(db)
+    document_owner(db, pid, user)
+    if (
+        db.scalar(
+            select(func.count())
+            .select_from(ProblemDocument)
+            .where(ProblemDocument.problem_id == pid)
+        )
+        >= 3
+    ):
+        raise HTTPException(409, "Maximum three documents per problem")
+    row = ProblemDocument(
+        problem_id=pid, name=name, media_type=media_type, size=len(blob), data=blob
+    )
+    db.add(row)
+    db.flush()
+    audit(db, user, "problem.document.add", row.id, {"problem_id": pid})
+    db.commit()
+    return {"id": row.id, "name": row.name, "size": row.size}
+
+
+@router.get("/problems/{pid}/documents/{did}")
+def download_document(
+    pid: int,
+    did: int,
+    contest_id: int | None = None,
+    user=Depends(current_user),
+    db: DBSession = Depends(get_db),
+):
+    from urllib.parse import quote
+
+    get_problem(pid, contest_id, "ru", user, db)
+    row = db.get(ProblemDocument, did)
+    if not row or row.problem_id != pid:
+        raise HTTPException(404, "Document not found")
+    return Response(
+        row.data,
+        media_type=row.media_type,
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''" + quote(row.name),
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.delete("/problems/{pid}/documents/{did}", status_code=204)
+def delete_document(
+    pid: int, did: int, user=Depends(teacher), db: DBSession = Depends(get_db)
+):
+    lock_write(db)
+    document_owner(db, pid, user)
+    row = db.get(ProblemDocument, did)
+    if not row or row.problem_id != pid:
+        raise HTTPException(404, "Document not found")
+    db.delete(row)
+    audit(db, user, "problem.document.delete", did, {"problem_id": pid})
+    db.commit()
+
+
+@router.post("/problems/import-url")
+def import_url(req: S.ExternalProblemIn, user=Depends(teacher)):
+    from ..services.external_problems import (
+        canonical_url,
+        fetch_statement,
+        parse_statement,
+    )
+
+    try:
+        url = canonical_url(req.url)
+        return parse_statement(
+            url, req.html if req.html is not None else fetch_statement(url)
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None

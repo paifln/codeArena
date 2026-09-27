@@ -31,22 +31,35 @@ let refreshing: Promise<boolean> | null = null;
 async function refreshSession(): Promise<boolean> {
   if (!refreshing) {
     const renew = async () => {
-      const csrf = document.cookie.split("; ").find((v) => v.startsWith("ca_csrf="))?.slice(8);
+      const csrf = document.cookie
+        .split("; ")
+        .find((v) => v.startsWith("ca_csrf="))
+        ?.slice(8);
       if (!csrf) return false;
       const response = await fetch("/api/v1/auth/refresh", {
-        method: "POST", credentials: "include",
+        method: "POST",
+        credentials: "include",
         headers: { "X-CSRF-Token": decodeURIComponent(csrf) },
         signal: AbortSignal.timeout(15000),
       });
       return response.ok;
     };
     // Serialize rotation across tabs as well as concurrent requests in this tab.
-    refreshing = (navigator.locks
-      ? navigator.locks.request("codearena-refresh", async () => {
-          const check = await fetch("/api/v1/auth/me", { credentials: "include", signal: AbortSignal.timeout(15000) });
-          return check.ok || renew();
-        })
-      : renew()).catch(() => false).finally(() => { refreshing = null; });
+    refreshing = (
+      navigator.locks
+        ? navigator.locks.request("codearena-refresh", async () => {
+            const check = await fetch("/api/v1/auth/me", {
+              credentials: "include",
+              signal: AbortSignal.timeout(15000),
+            });
+            return check.ok || renew();
+          })
+        : renew()
+    )
+      .catch(() => false)
+      .finally(() => {
+        refreshing = null;
+      });
   }
   return refreshing;
 }
@@ -61,20 +74,33 @@ export async function api<T = any>(
     .find((v) => v.startsWith("ca_csrf="))
     ?.slice(8);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), /^\/groups\/\d+\/students$/.test(path) ? 120000 : 15000);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    /^\/groups\/\d+\/students$/.test(path) || path === "/teams/prepare"
+      ? 180000
+      : 15000,
+  );
   try {
     const r = await fetch("/api/v1" + path, {
       signal: controller.signal,
       method: method || (body === undefined ? "GET" : "POST"),
       credentials: "include",
       headers: {
-        "Content-Type": "application/json",
+        ...(body instanceof FormData
+          ? {}
+          : { "Content-Type": "application/json" }),
         ...(csrf ? { "X-CSRF-Token": decodeURIComponent(csrf) } : {}),
       },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined
+        ? {}
+        : { body: body instanceof FormData ? body : JSON.stringify(body) }),
     });
     if (!r.ok) {
-      if (r.status === 401 && !retried && !["/auth/login", "/auth/setup", "/auth/refresh"].includes(path)) {
+      if (
+        r.status === 401 &&
+        !retried &&
+        !["/auth/login", "/auth/setup", "/auth/refresh"].includes(path)
+      ) {
         if (await refreshSession()) return api<T>(path, body, method, true);
       }
       if (r.status === 401) useSession.getState().setUser(null);

@@ -1,3 +1,5 @@
+import { languages } from "../../languages";
+import { ProblemDocuments } from "../contest/ProblemDocuments";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Clock, Play, Send, Terminal } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
@@ -68,6 +70,10 @@ function SolverWorkspace({
     queryFn: () =>
       api<ProblemDetail>(`/problems/${problemId}?contest_id=${id}`),
   });
+  useEffect(() => {
+    const allowed = contest.data?.languages;
+    if (allowed?.length && !allowed.includes(language)) setLanguage(allowed[0]);
+  }, [contest.data?.languages, language, setLanguage]);
   const result = useQuery({
     queryKey: ["submission", submission],
     queryFn: () => api<SubmissionResult>(`/submissions/${submission}`),
@@ -202,6 +208,14 @@ function SolverWorkspace({
             <h3>{t("output")}</h3>
             <ReactMarkdown>{p.output_fmt}</ReactMarkdown>
           </div>
+          {!!p.documents?.length && (
+            <ProblemDocuments
+              key={p.id}
+              problemId={p.id}
+              documents={p.documents}
+              contestId={id}
+            />
+          )}
           {(p.samples || []).map((s: any, i: number) => (
             <div className="sample" key={i}>
               <h3>
@@ -251,12 +265,7 @@ function SolverWorkspace({
         <section className="card editor-panel">
           <div className="editor-header">
             <span>
-              <Terminal size={16} />{" "}
-              {language === "java17"
-                ? "Main.java"
-                : language === "cpp20"
-                  ? "main.cpp"
-                  : "main.py"}
+              <Terminal size={16} /> {languages[language]?.file}
             </span>
             <select
               aria-label={t("languageVersion")}
@@ -264,21 +273,19 @@ function SolverWorkspace({
               disabled={waiting}
               onChange={(e) => setLanguage(e.target.value)}
             >
-              <option value="python3">Python 3.12</option>
-              <option value="cpp20">C++20 (GCC 12)</option>
-              <option value="java17">Java 17</option>
+              {(contest.data?.languages || ["python3", "cpp20", "java17"]).map(
+                (lang) => (
+                  <option key={lang} value={lang}>
+                    {languages[lang]?.label || lang}
+                  </option>
+                ),
+              )}
             </select>
           </div>
           <Suspense fallback={<Loading />}>
             <Editor
               height="420px"
-              language={
-                language === "python3"
-                  ? "python"
-                  : language === "cpp20"
-                    ? "cpp"
-                    : "java"
-              }
+              language={languages[language]?.editor || "plaintext"}
               theme={dark ? "vs-dark" : "light"}
               value={code}
               onChange={(value) => setCode(value || "")}

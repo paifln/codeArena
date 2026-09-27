@@ -1,3 +1,6 @@
+import { languages } from "./languages";
+import { ScoreboardTable } from "./features/contest/Scoreboard";
+import { PuzzleCollection } from "./features/contest/Scoreboard";
 import { FeedbackForm } from "./components/FeedbackForm";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,7 +14,7 @@ import {
   Terminal,
   Trophy,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 import { Timer } from "./components/ContestTimer";
@@ -41,9 +44,15 @@ export function Contest() {
   const contest = useQuery({
     queryKey: ["contest", id],
     queryFn: () => api(`/contests/${id}`),
-    refetchInterval: 5000,
+    refetchInterval: connected ? 30000 : 10000,
   });
   const [tab, setTab] = useState("tasks");
+  const me = useSession((s) => s.user);
+  const collections = useQuery({
+    queryKey: ["standings", id],
+    queryFn: () => api(`/contests/${id}/scoreboard`),
+    enabled: tab === "puzzles",
+  });
   const a = useAction();
   const c = contest.data;
   if (contest.isPending) return <Loading />;
@@ -68,6 +77,11 @@ export function Contest() {
         <Badge value={c.status} />
         <Timer contest={c} />
       </Heading>
+      {c.can_manage && (
+        <Link className="button secondary" to={`/contests/${id}/control`}>
+          {t("controlCenter")}
+        </Link>
+      )}
       <p className="muted">
         {t(c.mode)} ? {t(c.scoring)}
         {c.practice_enabled ? ` ? ${t("practiceEnabled")}` : ""}
@@ -128,6 +142,7 @@ export function Contest() {
             ["submissions", Terminal],
             ["standings", Trophy],
             ["messages", MessageSquare],
+            ["puzzles", Trophy],
           ].map(([name, Icon]: any) => (
             <button
               key={name}
@@ -179,6 +194,30 @@ export function Contest() {
       )}
       {tab === "standings" && <Standings id={id!} />}
       {tab === "messages" && <Messages id={id!} teacher={teacher} />}
+      {tab === "puzzles" && (
+        <>
+          <ErrorBox error={collections.error} />
+          <div className="puzzle-gallery">
+            {collections.data?.rows
+              .filter(
+                (r: any) =>
+                  teacher ||
+                  r.user_id === me?.id ||
+                  c.teams?.some(
+                    (team: any) =>
+                      team.id === r.team_id && team.user_ids.includes(me?.id),
+                  ),
+              )
+              .map((row: any) => (
+                <PuzzleCollection
+                  key={`${row.team_id}:${row.user_id}`}
+                  row={row}
+                  data={collections.data}
+                />
+              ))}
+          </div>
+        </>
+      )}
     </>
   );
 }
@@ -249,7 +288,7 @@ function Monitor({ id }: { id: string }) {
     </section>
   );
 }
-function Standings({ id }: { id: string }) {
+export function Standings({ id }: { id: string }) {
   const { t } = useTranslation();
   const data = useQuery({
     queryKey: ["standings", id],
@@ -304,76 +343,7 @@ function Standings({ id }: { id: string }) {
               {t("print")}
             </Button>
           </div>
-          <div className="card table-wrap">
-            <table className="scoreboard">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>{t("participants")}</th>
-                  <th>{t("solved")}</th>
-                  <th>{t(s.scoring === "PARTIAL" ? "points" : "penalty")}</th>
-                  {s.problems.map((p: any) => (
-                    <th key={p.id} title={p.title}>
-                      {p.letter}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {s.rows.map((r: any, i: number) => (
-                  <tr key={r.team_id || r.user_id}>
-                    <td>
-                      <span className={`rank rank-${r.rank}`}>{r.rank}</span>
-                    </td>
-                    <td>
-                      <strong>{r.name}</strong>
-                    </td>
-                    <td className="mono">{r.solved}</td>
-                    <td className="mono muted">
-                      {s.scoring === "PARTIAL" ? r.score : r.penalty}
-                    </td>
-                    {r.cells.map((c: any) => (
-                      <td
-                        key={c.problem_id}
-                        title={
-                          c.solved && s.scoring !== "PARTIAL"
-                            ? t("penaltyBreakdown", {
-                                time: c.time_minutes,
-                                penalty: c.penalty_minutes,
-                                total: c.penalty,
-                              })
-                            : undefined
-                        }
-                      >
-                        <span
-                          className={`score-cell ${c.solved ? "solved" : c.attempts ? "attempted" : ""}`}
-                        >
-                          {s.scoring === "PARTIAL"
-                            ? c.score
-                            : c.solved
-                              ? `+${c.attempts || ""}`
-                              : c.attempts
-                                ? `-${c.attempts}`
-                                : "?"}
-                          {c.pending > 0 && <small>? {c.pending}</small>}
-                          {c.solved && s.scoring !== "PARTIAL" && (
-                            <small>
-                              {t("penaltyBreakdown", {
-                                time: c.time_minutes,
-                                penalty: c.penalty_minutes,
-                                total: c.penalty,
-                              })}
-                            </small>
-                          )}
-                        </span>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!s.rows.length && <Empty title={t("noResults")} />}
-          </div>
+          <ScoreboardTable data={s} />
         </>
       )}
     </>
@@ -382,12 +352,35 @@ function Standings({ id }: { id: string }) {
 export function Submissions({ contestId }: { contestId?: string }) {
   const { t } = useTranslation();
   const teacher = useSession((s) => s.user?.role) !== "STUDENT";
-  const list = useList(
-    "/submissions" + (contestId ? `?contest_id=${contestId}` : ""),
-  );
   const [selected, setSelected] = useState<number | null>(null);
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [chosenContest, setChosenContest] = useState(contestId || "");
+  const [team, setTeam] = useState("");
+  const [problem, setProblem] = useState("");
+  const [language, setLanguage] = useState("");
+  const [after, setAfter] = useState("");
+  const [before, setBefore] = useState("");
+  const [offset, setOffset] = useState(0);
+  const contests = useList("/contests", !contestId);
+  const metadata = useQuery({
+    queryKey: ["contest", chosenContest],
+    queryFn: () => api(`/contests/${chosenContest}`),
+    enabled: !!chosenContest,
+  });
+  useEffect(
+    () => setOffset(0),
+    [chosenContest, team, problem, language, after, before, filter],
+  );
+  const params = new URLSearchParams({ limit: "100", offset: String(offset) });
+  if (chosenContest) params.set("contest_id", chosenContest);
+  if (team) params.set("team_id", team);
+  if (problem) params.set("problem_id", problem);
+  if (language) params.set("language", language);
+  if (filter) params.set("status", filter);
+  if (after) params.set("after", String(new Date(after).getTime() / 1000));
+  if (before) params.set("before", String(new Date(before).getTime() / 1000));
+  const list = useList("/submissions?" + params.toString());
   const detail = useQuery({
     queryKey: ["submission", selected],
     queryFn: () => api(`/submissions/${selected}`),
@@ -401,6 +394,79 @@ export function Submissions({ contestId }: { contestId?: string }) {
     <>
       {!contestId && <Heading title={t("submissions")} subtitle={t("live")} />}
       <div className="toolbar">
+        {!contestId && (
+          <select
+            aria-label={t("contests")}
+            value={chosenContest}
+            onChange={(e) => {
+              setChosenContest(e.target.value);
+              setTeam("");
+              setProblem("");
+            }}
+          >
+            <option value="">
+              {t("contests")}: {t("all")}
+            </option>
+            {contests.data?.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.title}
+              </option>
+            ))}
+          </select>
+        )}
+        <select
+          aria-label={t("teams")}
+          value={team}
+          onChange={(e) => setTeam(e.target.value)}
+        >
+          <option value="">
+            {t("teams")}: {t("all")}
+          </option>
+          {metadata.data?.teams?.map((x: any) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label={t("problems")}
+          value={problem}
+          onChange={(e) => setProblem(e.target.value)}
+        >
+          <option value="">
+            {t("problems")}: {t("all")}
+          </option>
+          {metadata.data?.problems?.map((x: any) => (
+            <option key={x.id} value={x.id}>
+              {x.letter}. {x.title}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label={t("languages")}
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+        >
+          <option value="">
+            {t("languages")}: {t("all")}
+          </option>
+          {Object.keys(languages).map((x) => (
+            <option key={x}>{x}</option>
+          ))}
+        </select>
+        <input
+          aria-label={t("fromTime")}
+          type="datetime-local"
+          value={after}
+          onChange={(e) => setAfter(e.target.value)}
+        />
+        <input
+          aria-label={t("untilTime")}
+          type="datetime-local"
+          value={before}
+          onChange={(e) => setBefore(e.target.value)}
+        />
+
         <input
           className="submission-search"
           placeholder={t("search")}
@@ -441,6 +507,8 @@ export function Submissions({ contestId }: { contestId?: string }) {
             <thead>
               <tr>
                 <th>#</th>
+                <th>{t("time")}</th>
+                <th>{t("memory")}</th>
                 {teacher && <th>{t("participants")}</th>}
                 <th>{t("tasks")}</th>
                 <th>{t("result")}</th>
@@ -460,6 +528,10 @@ export function Submissions({ contestId }: { contestId?: string }) {
                 .map((s) => (
                   <tr key={s.id}>
                     <td className="mono muted">#{s.id}</td>
+                    <td className="mono muted">
+                      {new Date(s.created_at).toLocaleTimeString()}
+                    </td>
+                    <td className="mono">{s.memory_kb} KB</td>
                     {teacher && <td>{s.user_name || s.user_id}</td>}
                     <td>
                       <strong>{s.problem_title || `#${s.problem_id}`}</strong>
@@ -486,6 +558,25 @@ export function Submissions({ contestId }: { contestId?: string }) {
         ) : (
           <Empty title={t("noActivity")} />
         )}
+      </div>
+      <div className="row standings-actions">
+        <Button
+          variant="secondary"
+          disabled={offset === 0}
+          onClick={() => setOffset(Math.max(0, offset - 100))}
+        >
+          {t("previous")}
+        </Button>
+        <span>
+          {offset + 1}?{offset + (list.data?.length || 0)}
+        </span>
+        <Button
+          variant="secondary"
+          disabled={(list.data?.length || 0) < 100}
+          onClick={() => setOffset(offset + 100)}
+        >
+          {t("next")}
+        </Button>
       </div>
       <Modal
         title={`${t("submissions")} #${selected}`}
@@ -518,7 +609,43 @@ export function Submissions({ contestId }: { contestId?: string }) {
                 </div>
                 <ErrorBox error={a.error} />
                 <pre className="source-preview">{detail.data.source}</pre>
+                {teacher && detail.data.code_review && (
+                  <section className="card control-panel">
+                    <h3>{t("codeReview")}</h3>
+                    <p className="muted">{t("codeReviewHint")}</p>
+                    {detail.data.code_review.findings.length ? (
+                      detail.data.code_review.findings.map(
+                        (f: any, i: number) => (
+                          <div key={i}>
+                            <strong>
+                              L{f.line}: {t(f.rule)}
+                            </strong>
+                            <pre>{f.excerpt}</pre>
+                          </div>
+                        ),
+                      )
+                    ) : (
+                      <p>{t("noCodeMarkers")}</p>
+                    )}
+                  </section>
+                )}
                 <Results result={detail.data} />
+                {teacher && detail.data.history?.length > 0 && (
+                  <details>
+                    <summary>{t("rejudge")}</summary>
+                    {detail.data.history.map((h: any, i: number) => (
+                      <p key={i}>
+                        {t(h.status)} ?{" "}
+                        {t(
+                          detail.data.history[i + 1]?.status ||
+                            detail.data.status,
+                        )}{" "}
+                        ? {new Date(h.rejudged_at * 1000).toLocaleString()} ?{" "}
+                        {t("rejudgedBy")}: #{h.rejudged_by || "?"}
+                      </p>
+                    ))}
+                  </details>
+                )}
                 {teacher && (
                   <FeedbackForm
                     key={detail.data.id}
@@ -534,13 +661,17 @@ export function Submissions({ contestId }: { contestId?: string }) {
     </>
   );
 }
-function Messages({ id, teacher }: { id: string; teacher: boolean }) {
+export function Messages({ id, teacher }: { id: string; teacher: boolean }) {
   const { t } = useTranslation();
   const announcements = useList(`/contests/${id}/announcements`);
   const clarifications = useList(`/contests/${id}/clarifications`);
   const q = useQueryClient();
   const a = useAction();
   const [answer, setAnswer] = useState<any>(null);
+  const contest = useQuery({
+    queryKey: ["contest", id],
+    queryFn: () => api(`/contests/${id}`),
+  });
   return (
     <div className="messages-grid">
       <section>
@@ -601,12 +732,25 @@ function Messages({ id, teacher }: { id: string; teacher: boolean }) {
               a.execute(async () => {
                 await api(`/contests/${id}/clarifications`, {
                   question: f.get("question"),
+                  problem_id: f.get("problem_id")
+                    ? Number(f.get("problem_id"))
+                    : null,
                 });
                 form.reset();
                 q.invalidateQueries();
               });
             }}
           >
+            <Field label={t("problems")}>
+              <select name="problem_id">
+                <option value="">{t("general")}</option>
+                {contest.data?.problems?.map((p: any) => (
+                  <option key={p.id} value={p.id}>
+                    {p.letter}. {p.title}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label={t("ask")}>
               <textarea name="question" required rows={3} />
             </Field>
@@ -619,7 +763,27 @@ function Messages({ id, teacher }: { id: string; teacher: boolean }) {
         {clarifications.data?.map((c) => (
           <article className="card message-card" key={c.id}>
             <strong>{c.user_name || t("question")}</strong>
+            <small className="block muted">
+              #{c.id} ? {t(c.status || "OPEN")}{" "}
+              {c.problem_id
+                ? `? ${contest.data?.problems?.find((p: any) => p.id === c.problem_id)?.letter || ""}`
+                : ""}
+            </small>
             <p>{c.question}</p>
+            {teacher && c.status === "OPEN" && (
+              <Button
+                variant="ghost"
+                disabled={a.busy}
+                onClick={() =>
+                  a.execute(async () => {
+                    await api(`/clarifications/${c.id}/dismiss`, {});
+                    q.invalidateQueries();
+                  })
+                }
+              >
+                {t("dismiss")}
+              </Button>
+            )}
             {c.answer ? (
               <div className="answer">
                 <strong>

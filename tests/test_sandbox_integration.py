@@ -113,6 +113,8 @@ def test_interrupted_lease_recovers_with_real_execution(tmp_path, sandbox):
     engine=create_engine(f'sqlite:///{tmp_path / "recovery.db"}')
     Base.metadata.create_all(engine);factory=sessionmaker(engine)
     with factory() as db:
+        from app.models import Contest
+        db.add(Contest(id=1,title='Recovery fixture',author_id=1,start_time=1,end_time=2))
         item=Submission(user_id=1,contest_id=1,problem_id=1,source='print(3)',language='python3',kind='SUBMIT',
             problem_snapshot={'tests':[{'input_data':'','expected':'3','is_sample':True}]})
         db.add(item);db.commit();sid=item.id

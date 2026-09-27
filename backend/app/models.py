@@ -11,6 +11,7 @@ from sqlalchemy import (
     UniqueConstraint,
     CheckConstraint,
     Index,
+    LargeBinary,
 )
 from .db import Base
 
@@ -94,6 +95,22 @@ class Problem(Timestamps, Base):
     )
 
 
+class ProblemDocument(Base):
+    __tablename__ = "problem_documents"
+    id = Column(Integer, primary_key=True)
+    problem_id = Column(
+        Integer,
+        ForeignKey("problems.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(180), nullable=False)
+    media_type = Column(String(100), nullable=False)
+    size = Column(Integer, nullable=False)
+    data = Column(LargeBinary, nullable=False)
+    created_at = Column(Float, default=time.time, nullable=False)
+
+
 class TestCase(Base):
     __tablename__ = "test_cases"
     id = Column(Integer, primary_key=True)
@@ -129,6 +146,13 @@ class Contest(Timestamps, Base):
     mode = Column(String(16), default="INDIVIDUAL", nullable=False)
     scoring = Column(String(16), default="ICPC", nullable=False)
     practice_enabled = Column(Boolean, default=False, nullable=False)
+    penalty_minutes = Column(Integer, default=20, nullable=False)
+    languages = Column(
+        JSON, default=lambda: ["python3", "cpp20", "java17"], nullable=False
+    )
+    public_scoreboard = Column(Boolean, default=False, nullable=False)
+    logo_data = Column(Text, default="", nullable=False)
+    revealed_ids = Column(JSON, default=list, nullable=False)
     __table_args__ = (
         CheckConstraint("end_time > start_time"),
         CheckConstraint(
@@ -229,6 +253,7 @@ class Clarification(Timestamps, Base):
     question = Column(Text, nullable=False)
     answer = Column(Text, default="")
     is_public = Column(Boolean, default=False, nullable=False)
+    status = Column(String(16), default="OPEN", nullable=False)
 
 
 class Announcement(Timestamps, Base):
@@ -246,6 +271,7 @@ class AuditLog(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     action = Column(String(80), nullable=False)
     entity_id = Column(Integer)
+    contest_id = Column(Integer, ForeignKey("contests.id"), index=True)
     detail = Column(JSON, default=dict)
     created_at = Column(Float, default=time.time, nullable=False)
 
@@ -266,13 +292,56 @@ class RateLimit(Base):
 class Team(Base):
     __tablename__ = "teams"
     id = Column(Integer, primary_key=True)
-    contest_id = Column(Integer, ForeignKey("contests.id", ondelete="CASCADE"), nullable=False)
+    contest_id = Column(
+        Integer, ForeignKey("contests.id", ondelete="CASCADE"), nullable=False
+    )
     name = Column(String(100), nullable=False)
+    organization = Column(String(120), default="", nullable=False)
+    created_at = Column(Float, default=time.time, nullable=False)
     __table_args__ = (UniqueConstraint("contest_id", "name"),)
 
 
 class TeamMember(Base):
     __tablename__ = "team_members"
-    contest_id = Column(Integer, ForeignKey("contests.id", ondelete="CASCADE"), primary_key=True)
+    contest_id = Column(
+        Integer, ForeignKey("contests.id", ondelete="CASCADE"), primary_key=True
+    )
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
-    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    team_id = Column(
+        Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False
+    )
+
+
+class ContestPresence(Base):
+    __tablename__ = "contest_presence"
+    contest_id = Column(
+        Integer, ForeignKey("contests.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    last_seen = Column(Float, nullable=False)
+    connected = Column(Boolean, default=True, nullable=False)
+
+
+class PuzzleReward(Base):
+    __tablename__ = "puzzle_rewards"
+    id = Column(Integer, primary_key=True)
+    contest_id = Column(Integer, ForeignKey("contests.id"), nullable=False, index=True)
+    identity = Column(String(40), nullable=False)
+    problem_id = Column(Integer, ForeignKey("problems.id"), nullable=False)
+    submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=False)
+    solved_at = Column(Float, nullable=False)
+    delivered_at = Column(Float)
+    delivered_by = Column(Integer, ForeignKey("users.id"))
+    revoked = Column(Boolean, default=False, nullable=False)
+    __table_args__ = (UniqueConstraint("contest_id", "identity", "problem_id"),)
+
+
+class RejudgeBatch(Base):
+    __tablename__ = "rejudge_batches"
+    id = Column(Integer, primary_key=True)
+    contest_id = Column(Integer, ForeignKey("contests.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    remaining_ids = Column(JSON, default=list, nullable=False)
+    total = Column(Integer, nullable=False)
+    created_at = Column(Float, default=time.time, nullable=False)
+    finished_at = Column(Float)

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./features/contest/contest.css";
 .profile-menu {
   position: relative;
 }

@@ -4,7 +4,8 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select, func, or_
 from sqlalchemy.orm import Session as DBSession
-from ..db import get_db
+from ..db import get_db, lock_write
+from ..services.contest_events import emit
 from ..models import (
     Announcement,
     AuditLog,
@@ -44,7 +45,9 @@ def dashboard(user=Depends(current_user), db: DBSession = Depends(get_db)):
     ]
     ids = [c.id for c in visible]
     query = select(Submission).where(
-        Submission.kind == "SUBMIT", Submission.is_practice.is_(False), Submission.contest_id.in_(ids)
+        Submission.kind == "SUBMIT",
+        Submission.is_practice.is_(False),
+        Submission.contest_id.in_(ids),
     )
     if user.role == "STUDENT":
         query = query.where(Submission.user_id == user.id)
@@ -80,7 +83,15 @@ def standings_csv(cid: int, user=Depends(teacher), db: DBSession = Depends(get_d
     data = scoreboard(db, c, user)
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["Rank", "Name", "Username", "Solved", "Points" if c.scoring == "PARTIAL" else "Penalty"])
+    writer.writerow(
+        [
+            "Rank",
+            "Name",
+            "Username",
+            "Solved",
+            "Points" if c.scoring == "PARTIAL" else "Penalty",
+        ]
+    )
 
     def safe_cell(text):
         return "'" + text if text and text[0] in "=+-@\t\r" else text
@@ -144,8 +155,10 @@ def questions(cid: int, user=Depends(current_user), db: DBSession = Depends(get_
             "question": a.question,
             "answer": a.answer,
             "is_public": a.is_public,
+            "status": a.status,
             "problem_id": a.problem_id,
             "user_id": a.user_id,
+            "user_name": db.get(User, a.user_id).name,
             "created_at": iso(a.created_at),
         }
         for a in db.scalars(q.order_by(Clarification.created_at.desc()))
@@ -165,6 +178,8 @@ def ask(
     throttle(db, f"question:{user.id}", 10, 60)
     q = Clarification(contest_id=cid, user_id=user.id, **req.model_dump())
     db.add(q)
+    db.flush()
+    emit(db, cid, "clarification.created", q.id, {"problem_id": q.problem_id}, user)
     db.commit()
     return {"id": q.id, "question": q.question, "answer": "", "is_public": False}
 
@@ -178,10 +193,31 @@ def answer(
         raise HTTPException(404, "Not found")
     owned(db.get(Contest, q.contest_id), user)
     q.answer = req.answer
+    q.status = "ANSWERED"
     q.is_public = req.is_public
-    audit(db, user, "clarification.answer", qid, {"is_public": req.is_public})
+    emit(
+        db,
+        q.contest_id,
+        "clarification.answered",
+        qid,
+        {"is_public": req.is_public},
+        user,
+    )
     db.commit()
     return {"id": q.id, "answer": q.answer, "is_public": q.is_public}
+
+
+@router.post("/clarifications/{qid}/dismiss")
+def dismiss(qid: int, user=Depends(teacher), db: DBSession = Depends(get_db)):
+    lock_write(db)
+    q = db.get(Clarification, qid)
+    if q is None:
+        raise HTTPException(404, "Question not found")
+    owned(db.get(Contest, q.contest_id), user)
+    q.status = "DISMISSED"
+    emit(db, q.contest_id, "clarification.dismissed", qid, user=user)
+    db.commit()
+    return {"status": q.status}
 
 
 @router.get("/contests/{cid}/announcements")
@@ -215,7 +251,7 @@ def announce(
     a = Announcement(contest_id=cid, author_id=user.id, **req.model_dump())
     db.add(a)
     db.flush()
-    audit(db, user, "announcement.create", a.id)
+    emit(db, cid, "announcement.created", a.id, user=user)
     db.commit()
     return {"id": a.id, "message": a.message, "level": a.level}
 

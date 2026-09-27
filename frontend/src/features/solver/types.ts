@@ -7,6 +7,7 @@ export interface ContestDetail {
   id: number;
   title: string;
   status: string;
+  languages?: string[];
   start_time: string;
   end_time: string;
   server_time: string;
@@ -24,6 +25,7 @@ export interface Sample {
   is_sample: boolean;
 }
 export interface ProblemDetail {
+  documents?: { id: number; name: string; size: number }[];
   id: number;
   title: string;
   description: string;

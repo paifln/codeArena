@@ -1,4 +1,9 @@
 import { Operations } from "./components/Operations";
+import {
+  ControlCenter,
+  PuzzleDeskPage,
+} from "./features/contest/ControlCenter";
+import { PublicDisplay } from "./features/contest/PublicDisplay";
 import { ProfileMenu } from "./components/ProfileMenu";
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
@@ -332,6 +337,14 @@ function Application() {
             />
             {teacher && (
               <>
+                <Route
+                  path="/contests/:id/control"
+                  element={<ControlCenter />}
+                />
+                <Route
+                  path="/contests/:id/puzzles"
+                  element={<PuzzleDeskPage />}
+                />
                 <Route path="/problems" element={<Problems />} />
                 <Route path="/groups" element={<Groups />} />
               </>
@@ -355,7 +368,13 @@ createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <Application />
+        <Routes>
+          <Route
+            path="/display/contests/:id/:view"
+            element={<PublicDisplay />}
+          />
+          <Route path="*" element={<Application />} />
+        </Routes>
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>,

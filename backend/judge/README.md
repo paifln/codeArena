@@ -18,13 +18,13 @@ database every five seconds, including while a submission is being judged.
 
 Each compile check and each test gets a fresh container with the Docker default
 seccomp profile, all capabilities dropped, no-new-privileges, non-root UID,
-no network, read-only root, 16 MiB noexec `/tmp`, 32 MiB executable `/work`,
-16 processes (32 for Java), one CPU, bounded
-memory with swap disabled, 64 file descriptors and 1 MiB file size limit.
+no network, read-only root, 16 MiB noexec `/tmp`, 96 MiB executable `/work`,
+16 processes (32 for Java, JavaScript, Go and C#), one CPU, bounded
+memory with swap disabled, 64 file descriptors and 4 MiB file size limit.
 There are no host mounts, inherited service environment variables or secrets.
 The source and test input travel through stdin; no expected answers enter the
 container. Python compilation checks syntax without executing source.
-C++20 uses GCC 12; Java uses OpenJDK 17. Compilation has a 10-second/512-MB
+C++20 uses GCC 12; Java uses OpenJDK 17. JavaScript uses Node.js 18 (CommonJS), Go uses 1.19 without CGO/module downloads, and C# uses Mono 6.8/mcs. Compilation has a 10-second/512-MB
 budget. Bounded artifacts are passed as base64 ZIP data to fresh test containers
 and never executed by the worker. Paths and expansion size are checked. Java JVM
 overhead counts toward the memory limit. Compiler failures are non-penalized CE;
@@ -33,7 +33,7 @@ Execution uses normal Python `__main__` semantics. After each invocation the
 worker force-removes the container. A background collector removes expired
 containers left behind by a worker crash.
 
-Stdout and stderr are independently capped at 256 KiB. Exceeding either produces
+Runtime stdout and stderr are independently capped at 256 KiB. Compile artifact stdout has a separate 6 MiB transport cap for a maximum 4 MiB unpacked ZIP artifact; compiler diagnostics retain the 256 KiB cap. Exceeding either produces
 `OUTPUT_LIMIT_EXCEEDED`, a penalized verdict. CPU hard limits and a host wall
 timer stop excessive execution; the wall limit includes a fixed one-second
 Docker/bootstrap allowance. Reported `time_ms` is end-to-end container wall

@@ -10,7 +10,9 @@ from ..models import (
     ContestProblem,
     Group,
     Problem,
-    User, Team, TeamMember,
+    User,
+    Team,
+    TeamMember,
 )
 from .. import schemas as S
 from ..security import current_user, teacher, owned
@@ -50,7 +52,10 @@ def create_contest(
         owned(db.get(Problem, pid), user)
     for gid in req.group_ids:
         owned(db.get(Group, gid), user)
-    for uid in [*req.participant_ids, *(uid for team in req.teams for uid in team.user_ids)]:
+    for uid in [
+        *req.participant_ids,
+        *(uid for team in req.teams for uid in team.user_ids),
+    ]:
         u = db.get(User, uid)
         if (
             not u
@@ -63,6 +68,7 @@ def create_contest(
         **req.model_dump(
             exclude={
                 "teams",
+                "freeze_minutes",
                 "problem_ids",
                 "group_ids",
                 "participant_ids",
@@ -74,6 +80,9 @@ def create_contest(
         end_time=req.end_time.timestamp(),
         author_id=user.id,
         status="SCHEDULED",
+        freeze_at=req.end_time.timestamp() - req.freeze_minutes * 60
+        if req.freeze_minutes
+        else None,
     )
     db.add(c)
     db.flush()
@@ -84,11 +93,12 @@ def create_contest(
     for uid in set(req.participant_ids):
         db.add(ContestParticipant(contest_id=c.id, user_id=uid))
     for item in req.teams:
-        team = Team(contest_id=c.id, name=item.name)
-        db.add(team); db.flush()
+        team = Team(contest_id=c.id, name=item.name, organization=item.organization)
+        db.add(team)
+        db.flush()
         for uid in item.user_ids:
             db.add(TeamMember(contest_id=c.id, team_id=team.id, user_id=uid))
-    audit(db, user, "contest.create", c.id)
+    audit(db, user, "contest.create", c.id, contest_id=c.id)
     db.commit()
     return contest_public(db, c, user)
 
@@ -102,7 +112,12 @@ def contest_detail(
 
 
 @router.patch("/contests/{cid}/practice")
-def configure_practice(cid: int, req: S.PracticeSettings, user=Depends(teacher), db: DBSession = Depends(get_db)):
+def configure_practice(
+    cid: int,
+    req: S.PracticeSettings,
+    user=Depends(teacher),
+    db: DBSession = Depends(get_db),
+):
     lock_write(db)
     c = owned(db.get(Contest, cid), user)
     c.practice_enabled = req.practice_enabled
@@ -124,6 +139,8 @@ def transition(db, cid, user, action, minutes=0):
     }
     if action == "start" and state in ("SCHEDULED", "DRAFT"):
         duration = c.end_time - c.start_time
+        if c.freeze_at is not None:
+            c.freeze_at += now - c.start_time
         c.start_time = now
         c.end_time = now + duration
         c.status = "RUNNING"
@@ -132,6 +149,8 @@ def transition(db, cid, user, action, minutes=0):
         c.paused_at = now
     elif action == "resume" and state == "PAUSED":
         elapsed = now - c.paused_at
+        if c.freeze_at is not None and c.freeze_at > c.paused_at:
+            c.freeze_at += elapsed
         c.end_time += elapsed
         c.paused_seconds += elapsed
         c.paused_at = None
@@ -140,10 +159,13 @@ def transition(db, cid, user, action, minutes=0):
         c.status = "FINISHED"
     elif action == "extend" and state in ("SCHEDULED", "RUNNING", "PAUSED"):
         c.end_time += minutes * 60
-    elif action == "freeze" and state in ("RUNNING", "PAUSED") and c.freeze_at is None:
+        if c.freeze_at is not None and c.freeze_at > (c.paused_at or now):
+            c.freeze_at += minutes * 60
+    elif action == "freeze" and state in ("RUNNING", "PAUSED"):
         c.freeze_at = now
     elif action == "unfreeze" and c.freeze_at is not None:
         c.freeze_at = None
+        c.revealed_ids = []
     else:
         raise HTTPException(409, "Invalid contest transition")
     audit(
@@ -160,6 +182,7 @@ def transition(db, cid, user, action, minutes=0):
                 "freeze_at": c.freeze_at,
             },
         },
+        contest_id=c.id,
     )
     db.commit()
     return contest_public(db, c, user)
