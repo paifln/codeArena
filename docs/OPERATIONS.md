@@ -60,10 +60,9 @@ One worker process has two execution slots by default. JUDGE_CONCURRENCY accepts
 at most three claims before SYSTEM_ERROR. Stale workers cannot overwrite new
 leases. Teachers can rejudge infrastructure errors without student penalties.
 
-## Demo replacement
+## Contest archive
 
-After a verified backup, stop API/worker/backup. The app.replace_demo maintenance
-command takes explicit --author-id and --group-ids. It replaces only the marked
-demo and selected groups, retains credentials and transfers active members.
-Groups linked to another contest are rejected. --start starts a 90-minute demo.
-This replaces demo history and must not be used for real assessments.
+Archive finished contests from their control center to hide them from participants.
+Restore them from the archive tab when needed. Submissions, teams and rewards remain
+intact; public display is disabled on archive and must be explicitly enabled again.
+The obsolete destructive demo-replacement utility has been removed.

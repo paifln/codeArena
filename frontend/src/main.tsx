@@ -159,9 +159,7 @@ function Auth({ setup, onDone }: { setup: boolean; onDone: () => void }) {
             {t(a.busy ? "loading" : setup ? "createSpace" : "login")}{" "}
             <span>→</span>
           </Button>
-          <p className="auth-note">
-            {t(setup ? "setupJudge" : "credentialsHint")}
-          </p>
+          {!setup && <p className="auth-note">{t("credentialsHint")}</p>}
         </form>
       </section>
     </main>

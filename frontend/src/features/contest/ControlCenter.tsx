@@ -1,3 +1,4 @@
+import { ContestDetailsForm } from "./ContestDetailsForm";
 import { languages as languageCatalog } from "../../languages";
 import { useState, useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -213,6 +214,19 @@ export function ControlCenter() {
           {t(connected ? "live" : "reconnecting")}
         </span>
       </div>
+      {["FINISHED", "ARCHIVED"].includes(c.status) && (
+        <Button
+          variant="secondary"
+          disabled={a.busy}
+          onClick={() => {
+            if (c.status === "FINISHED" && !confirm(t("archiveConfirm")))
+              return;
+            control(c.status === "ARCHIVED" ? "restore" : "archive");
+          }}
+        >
+          {t(c.status === "ARCHIVED" ? "restoreContest" : "archiveContest")}
+        </Button>
+      )}
       <ErrorBox error={a.error} />
       <nav className="tabs control-tabs" aria-label={t("controlCenter")}>
         {[
@@ -221,7 +235,6 @@ export function ControlCenter() {
           "submissions",
           "teams",
           "problems",
-          "judge",
           "messages",
           "puzzles",
           "replay",
@@ -272,7 +285,6 @@ export function ControlCenter() {
                         <small className="block muted">
                           {e.detail?.name || ""} {e.detail?.letter || ""}{" "}
                           {e.detail?.status ? t(e.detail.status) : ""}{" "}
-                          {e.entity_id ? `#${e.entity_id}` : ""}
                         </small>
                       </div>
                     </article>
@@ -283,10 +295,15 @@ export function ControlCenter() {
               </div>
             </section>
             <section className="card control-panel">
-              <h2>{t("judge")}</h2>
+              <h2>{t("checkingSolutions")}</h2>
               <p>
-                <strong>{t(d.judge.state)}</strong> · {d.judge.slots}{" "}
-                {t("slots")}
+                <strong>
+                  {t(
+                    d.judge.judge_available
+                      ? "checkingAvailable"
+                      : "checkingUnavailable",
+                  )}
+                </strong>
               </p>
               {d.alerts.disconnected.map((name: string) => (
                 <p key={name} className="notice warning">
@@ -315,7 +332,17 @@ export function ControlCenter() {
             <Link
               target="_blank"
               className="button secondary"
-              to={`/display/contests/${id}/scoreboard`}
+              to={
+                c.public_scoreboard
+                  ? `/display/contests/${id}/scoreboard`
+                  : `/contests/${id}/control`
+              }
+              onClick={(e) => {
+                if (!c.public_scoreboard) {
+                  e.preventDefault();
+                  setTab("settings");
+                }
+              }}
             >
               {t("projector")}
             </Link>
@@ -341,6 +368,56 @@ export function ControlCenter() {
       )}
       {tab === "teams" && (
         <>
+          <div className="card table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>{t("participants")}</th>
+                  <th>{t("status")}</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {d.teams.map((team: any) => (
+                  <tr key={team.identity}>
+                    <td>{team.name}</td>
+                    <td>
+                      {t(
+                        team.completed_at
+                          ? "participationComplete"
+                          : team.online
+                            ? "online"
+                            : "offline",
+                      )}
+                    </td>
+                    <td>
+                      {team.completed_at &&
+                        ["RUNNING", "PAUSED"].includes(c.status) && (
+                          <Button
+                            variant="secondary"
+                            disabled={a.busy}
+                            onClick={() => {
+                              if (confirm(t("reopenConfirm")))
+                                a.execute(async () => {
+                                  await api(
+                                    `/contests/${id}/participants/${team.identity}/reopen`,
+                                    {},
+                                  );
+                                  q.invalidateQueries({
+                                    queryKey: ["control", id],
+                                  });
+                                });
+                            }}
+                          >
+                            {t("reopenParticipation")}
+                          </Button>
+                        )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div className="card table-wrap">
             <table>
               <thead>
@@ -379,46 +456,6 @@ export function ControlCenter() {
       {tab === "problems" && (
         <ProblemStats problems={d.problems} onRejudge={(pid) => rejudge(pid)} />
       )}
-      {tab === "judge" && (
-        <>
-          <div className="control-metrics">
-            {[
-              [t("judge"), t(d.judge.state)],
-              [t("averageJudging"), d.judge.average_seconds ?? "—"],
-              [t("totalJudged"), d.judge.total_judged],
-              [t("pendingJobs"), d.queued],
-            ].map(([label, value]) => (
-              <article key={label} className="card metric">
-                <span>{label}</span>
-                <strong>{value}</strong>
-              </article>
-            ))}
-          </div>
-          <section className="card control-panel">
-            <h3>
-              {t("slots")}: {d.judge.slots}
-            </h3>
-            <p className="muted">{Object.values(languageCatalog).map(x=>x.label).join(" / ")}</p>
-            {d.judge.running.map((s: any) => (
-              <p key={s.id}>
-                #{s.id} · {s.seconds}s
-              </p>
-            ))}
-            <p>
-              {t("ready")}:{" "}
-              {d.judge.judge_available
-                ? Math.max(0, d.judge.slots - d.judge.busy_slots)
-                : 0}
-            </p>
-            {d.batches.map((b: any) => (
-              <p key={b.id}>
-                {t("rejudge")} #{b.id}: {b.total - b.remaining}/{b.total}
-              </p>
-            ))}
-          </section>
-          <Submissions contestId={id} />
-        </>
-      )}
       {tab === "messages" && <Messages id={id!} teacher />}
       {tab === "puzzles" && (
         <>
@@ -429,7 +466,17 @@ export function ControlCenter() {
             <Link
               target="_blank"
               className="button secondary"
-              to={`/display/contests/${id}/puzzles`}
+              to={
+                c.public_scoreboard
+                  ? `/display/contests/${id}/puzzles`
+                  : `/contests/${id}/control`
+              }
+              onClick={(e) => {
+                if (!c.public_scoreboard) {
+                  e.preventDefault();
+                  setTab("settings");
+                }
+              }}
             >
               {t("projector")}
             </Link>
@@ -440,8 +487,26 @@ export function ControlCenter() {
       {tab === "replay" && <ReplayReveal id={id!} contest={c} />}
       {tab === "settings" && (
         <div className="control-columns">
+          <ContestDetailsForm key={c.id + ":" + c.status} contest={c} />
           <section className="card control-panel">
             <h2>{t("publicBoard")}</h2>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={c.practice_enabled}
+                onChange={(e) =>
+                  a.execute(async () => {
+                    await api(
+                      `/contests/${id}/practice`,
+                      { practice_enabled: e.target.checked },
+                      "PATCH",
+                    );
+                    q.invalidateQueries({ queryKey: ["contest", id] });
+                  })
+                }
+              />
+              {t("practiceEnabled")}
+            </label>
             <label className="check-row">
               <input
                 type="checkbox"
@@ -553,7 +618,11 @@ export function ControlCenter() {
               {t("online")}: {d.teams.filter((x: any) => x.online).length}
             </p>
             <p>
-              {t("judge")}: {t(d.judge.state)}
+              {t(
+                d.judge.judge_available
+                  ? "checkingAvailable"
+                  : "checkingUnavailable",
+              )}
             </p>
           </section>
         </div>

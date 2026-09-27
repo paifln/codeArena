@@ -1,12 +1,12 @@
 # School and university launch roadmap
 
-Version 3.2 adds contest control, public displays, reveal/replay, puzzle rewards and bulk rejudging to the existing local contest platform. See PERFORMANCE.md for the 30-student baseline. Remaining work is listed below; this is not a certification or capacity claim.
+Version 3.4 adds explicit participant completion and reopening, private progress, contest editing and archiving, and simpler organizer screens. Six execution languages, statement import and PDF/DOCX attachments are available. See PERFORMANCE.md for the 30-student baseline. Remaining work is listed below; this is not a certification or capacity claim.
 
 ## P0: before the first real assessment
 
 | Work | Acceptance evidence |
 | --- | --- |
-| Rehearse student workflow | Teacher provisions class; students sign in, open assigned contests, Run and Submit; verify pause/resume and disconnection |
+| Rehearse student workflow | Teacher provisions class; students sign in, open assigned contests, Run, Submit and finish participation; verify reopening, pause/resume and disconnection |
 | Measure capacity | Simulate intended class size and simultaneous submissions on deployment hardware; record queue delay, p95 verdict time and failures |
 | Prove recovery | Restart worker, interrupt network and restore backup on another installation; verify submissions and standings |
 | Harden deployment | HTTPS, restricted admin access, maintained images, appropriate judge isolation and documented rollback |
@@ -20,13 +20,13 @@ Version 3.2 adds contest control, public displays, reveal/replay, puzzle rewards
 - Scoped volunteer accounts, printable puzzle delivery slips and wider validated problem-package compatibility.
 - Extend existing operations monitoring with retained metrics, external alert delivery and service targets. Avoid logging passwords or source.
 - Automated encrypted off-host backups and scheduled restoration checks with an accountable operator.
-- Real-browser regression tests with Monaco, multiple accounts, expired sessions, teacher resume and unreliable networks.
+- Extend the existing browser smoke tests with expired sessions and unreliable networks; run them in CI across supported browsers.
 
 ## P2: expand after measured demand
 
 - Repeat capacity tests and tune bounded slots/quotas within the single-worker SQLite deployment.
 - Institution ownership enforced throughout queries and exports before multi-institution hosting.
-- Additional runtime versions and JavaScript, with language-specific resource tests.
+- Maintained runtime upgrades and modern .NET support, with language-specific resource tests.
 - Dependency-based subtasks beyond existing weighted per-test scoring.
 - Code-similarity reports as teacher review aids, with evidence and student appeals; no automatic similarity penalties.
 

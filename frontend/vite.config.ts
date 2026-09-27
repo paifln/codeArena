@@ -9,5 +9,5 @@ export default defineConfig({
       "/ws": { target: "ws://127.0.0.1:8000", ws: true },
     },
   },
-  build: { chunkSizeWarningLimit: 1700 },
+  build: { sourcemap: false, chunkSizeWarningLimit: 1700 },
 });

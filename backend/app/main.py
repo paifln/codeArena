@@ -33,7 +33,7 @@ async def lifespan(app):
 
 
 app = FastAPI(
-    title="CodeArena", version="3.3.0", lifespan=lifespan, docs_url=None, redoc_url=None
+    title="CodeArena", version="3.4.0", lifespan=lifespan, docs_url=None, redoc_url=None
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -203,11 +203,22 @@ async def contest_ws(ws: WebSocket, cid: int):
             clarification_query = select(func.max(Clarification.updated_at)).where(
                 Clarification.contest_id == cid
             )
+            from .services.access import conversation_user_ids
+
             if not manager(c, u):
                 clarification_query = clarification_query.where(
-                    or_(Clarification.user_id == u.id, Clarification.is_public == True)
+                    or_(
+                        Clarification.user_id.in_(conversation_user_ids(db, c, u)),
+                        Clarification.is_public == True,
+                    )
                 )
+            from .services.participation import completed
+
+            completion = completed(db, c, u) if u.role == "STUDENT" else None
             return {
+                "participation_completed": completion.completed_at
+                if completion
+                else None,
                 "type": "contest.updated",
                 "status": contest_status(c),
                 "execution": execution_policy(db, c),

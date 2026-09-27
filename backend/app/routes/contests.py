@@ -157,12 +157,17 @@ def transition(db, cid, user, action, minutes=0):
         c.status = "RUNNING"
     elif action == "finish" and state in ("RUNNING", "PAUSED", "SCHEDULED"):
         c.status = "FINISHED"
+        if state in ("RUNNING", "PAUSED"):
+            c.end_time = max(now, c.start_time + 0.001)
+            if c.paused_at:
+                c.paused_seconds += now - c.paused_at
+            c.paused_at = None
     elif action == "extend" and state in ("SCHEDULED", "RUNNING", "PAUSED"):
         c.end_time += minutes * 60
         if c.freeze_at is not None and c.freeze_at > (c.paused_at or now):
             c.freeze_at += minutes * 60
     elif action == "freeze" and state in ("RUNNING", "PAUSED"):
-        c.freeze_at = now
+        c.freeze_at = c.paused_at or now
     elif action == "unfreeze" and c.freeze_at is not None:
         c.freeze_at = None
         c.revealed_ids = []
@@ -206,3 +211,114 @@ def control(
 ):
     action = request.url.path.rsplit("/", 1)[-1]
     return transition(db, cid, user, action)
+
+
+@router.post("/contests/{cid}/complete")
+def complete_participation(
+    cid: int, user=Depends(current_user), db: DBSession = Depends(get_db)
+):
+    from ..models import ParticipationCompletion
+    from ..services.participation import progress, identity_for, completed
+
+    lock_write(db)
+    c = access_contest(db, cid, user)
+    if user.role != "STUDENT":
+        raise HTTPException(403, "Participant account required")
+    if contest_status(c) not in ("RUNNING", "PAUSED", "FINISHED"):
+        raise HTTPException(409, "Contest is not available")
+    if not completed(db, c, user):
+        if progress(db, c, user)["pending"]:
+            raise HTTPException(409, "WAIT_FOR_JUDGING")
+        db.add(
+            ParticipationCompletion(
+                contest_id=cid,
+                identity=identity_for(db, c, user),
+                completed_at=time.time(),
+                completed_by=user.id,
+            )
+        )
+        audit(db, user, "participation.complete", cid, contest_id=cid)
+        db.commit()
+    return contest_public(db, c, user)
+
+
+@router.post("/contests/{cid}/participants/{identity}/reopen")
+def reopen_participation(
+    cid: int, identity: str, user=Depends(teacher), db: DBSession = Depends(get_db)
+):
+    from ..models import ParticipationCompletion
+
+    lock_write(db)
+    c = owned(db.get(Contest, cid), user)
+    if contest_status(c) not in ("RUNNING", "PAUSED"):
+        raise HTTPException(409, "Contest must be running or paused")
+    row = db.get(ParticipationCompletion, (cid, identity))
+    if not row:
+        raise HTTPException(404, "Completed participation not found")
+    db.delete(row)
+    audit(db, user, "participation.reopen", cid, {"identity": identity}, contest_id=cid)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/contests/{cid}/archive")
+@router.post("/contests/{cid}/restore")
+def archive_contest(
+    cid: int, request: Request, user=Depends(teacher), db: DBSession = Depends(get_db)
+):
+    lock_write(db)
+    c = owned(db.get(Contest, cid), user)
+    archive = request.url.path.endswith("/archive")
+    if (archive and contest_status(c) != "FINISHED") or (
+        not archive and c.status != "ARCHIVED"
+    ):
+        raise HTTPException(409, "Only finished contests can be archived")
+    c.status = "ARCHIVED" if archive else "FINISHED"
+    if archive:
+        c.public_scoreboard = False
+    audit(
+        db,
+        user,
+        "contest.archive" if archive else "contest.restore",
+        cid,
+        contest_id=cid,
+    )
+    db.commit()
+    return contest_public(db, c, user)
+
+
+@router.patch("/contests/{cid}/details")
+def edit_contest_details(
+    cid: int,
+    req: S.ContestDetails,
+    user=Depends(teacher),
+    db: DBSession = Depends(get_db),
+):
+    lock_write(db)
+    c = owned(db.get(Contest, cid), user)
+    c.title = req.title
+    c.description = req.description
+    c.rules = req.rules
+    if req.start_time is not None or req.end_time is not None:
+        if (
+            contest_status(c) not in ("DRAFT", "SCHEDULED")
+            or req.start_time is None
+            or req.end_time is None
+        ):
+            raise HTTPException(
+                409, "Schedule can only change before the contest starts"
+            )
+        start = req.start_time.timestamp()
+        end = req.end_time.timestamp()
+        if start <= time.time() or end <= start:
+            raise HTTPException(422, "Choose a future start and a later finish")
+        freeze_duration = c.end_time - c.freeze_at if c.freeze_at is not None else None
+        if freeze_duration is not None and freeze_duration >= end - start:
+            raise HTTPException(422, "Contest duration must exceed its freeze window")
+        c.start_time = start
+        c.end_time = end
+        if freeze_duration is not None:
+            c.freeze_at = end - freeze_duration
+    audit(db, user, "contest.details", cid, contest_id=cid)
+    db.commit()
+    return contest_public(db, c, user)

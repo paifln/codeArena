@@ -1,3 +1,4 @@
+import { ParticipationPanel } from "./features/contest/ParticipationPanel";
 import { languages } from "./languages";
 import { ScoreboardTable } from "./features/contest/Scoreboard";
 import { PuzzleCollection } from "./features/contest/Scoreboard";
@@ -21,7 +22,7 @@ import { Timer } from "./components/ContestTimer";
 import { Results } from "./components/SubmissionResults";
 
 import { api, downloadCSV, useSession } from "./api";
-import { useList } from "./pages";
+import { useList } from "./lib/useList";
 import {
   Badge,
   Button,
@@ -39,7 +40,6 @@ export function Contest() {
   const { id } = useParams();
   const connected = useContestEvents(id);
   const { t } = useTranslation();
-  const q = useQueryClient();
   const teacher = useSession((s) => s.user?.role) !== "STUDENT";
   const contest = useQuery({
     queryKey: ["contest", id],
@@ -53,20 +53,9 @@ export function Contest() {
     queryFn: () => api(`/contests/${id}/scoreboard`),
     enabled: tab === "puzzles",
   });
-  const a = useAction();
   const c = contest.data;
   if (contest.isPending) return <Loading />;
   if (!c) return <ErrorBox error={contest.error} />;
-  const control = (action: string) => {
-    if (action === "finish" && !confirm(t("confirmFinish"))) return;
-    a.execute(async () => {
-      await api(
-        `/contests/${id}/${action}`,
-        action === "extend" ? { minutes: 15 } : {},
-      );
-      q.invalidateQueries();
-    });
-  };
   return (
     <>
       <Link className="back-link" to="/contests">
@@ -83,58 +72,16 @@ export function Contest() {
         </Link>
       )}
       <p className="muted">
-        {t(c.mode)} ? {t(c.scoring)}
-        {c.practice_enabled ? ` ? ${t("practiceEnabled")}` : ""}
+        {t(c.mode)} / {t(c.scoring)}
+        {c.practice_enabled ? ` / ${t("practiceEnabled")}` : ""}
       </p>
-      {teacher && (
-        <div className="contest-controls">
-          <Button
-            variant="secondary"
-            disabled={a.busy}
-            onClick={() =>
-              a.execute(async () => {
-                await api(
-                  `/contests/${id}/practice`,
-                  { practice_enabled: !c.practice_enabled },
-                  "PATCH",
-                );
-                await q.invalidateQueries({ queryKey: ["contest", id] });
-              })
-            }
-          >
-            {t(c.practice_enabled ? "disablePractice" : "practiceEnabled")}
-          </Button>
-          <span className="muted">{t("TEACHER")}</span>
-          {(["DRAFT", "SCHEDULED"].includes(c.status)
-            ? ["start"]
-            : c.status === "RUNNING"
-              ? ["pause", "extend", "finish"]
-              : c.status === "PAUSED"
-                ? ["resume", "extend", "finish"]
-                : []
-          ).map((v) => (
-            <Button
-              key={v}
-              variant="secondary"
-              disabled={a.busy}
-              onClick={() => control(v)}
-            >
-              {t(v)}
-            </Button>
-          ))}
-          <Button
-            variant="secondary"
-            disabled={
-              a.busy || (!c.frozen && !["RUNNING", "PAUSED"].includes(c.status))
-            }
-            onClick={() => control(c.frozen ? "unfreeze" : "freeze")}
-          >
-            <Lock size={14} />
-            {t(c.frozen ? "unfreeze" : "freeze")}
-          </Button>
-        </div>
+      <ParticipationPanel contest={c} />
+      {c.rules && (
+        <details className="card control-panel">
+          <summary>{t("rules")}</summary>
+          <p style={{ whiteSpace: "pre-wrap" }}>{c.rules}</p>
+        </details>
       )}
-      <ErrorBox error={a.error} />
       <div className="toolbar contest-tabs">
         <div className="tabs">
           {[
@@ -143,16 +90,23 @@ export function Contest() {
             ["standings", Trophy],
             ["messages", MessageSquare],
             ["puzzles", Trophy],
-          ].map(([name, Icon]: any) => (
-            <button
-              key={name}
-              className={tab === name ? "selected" : ""}
-              onClick={() => setTab(name)}
-            >
-              <Icon size={16} />
-              {t(name)}
-            </button>
-          ))}
+          ]
+            .filter(
+              ([name]) =>
+                teacher ||
+                c.scoreboard_enabled ||
+                !["standings", "puzzles"].includes(String(name)),
+            )
+            .map(([name, Icon]: any) => (
+              <button
+                key={name}
+                className={tab === name ? "selected" : ""}
+                onClick={() => setTab(name)}
+              >
+                <Icon size={16} />
+                {t(name)}
+              </button>
+            ))}
         </div>
         <span className="live-label">
           <i style={{ background: connected ? undefined : "var(--warning)" }} />
@@ -174,7 +128,13 @@ export function Contest() {
                   </span>
                   <div>
                     <h3>{p.title}</h3>
-                    <span className="muted">Python / C++ / Java</span>
+                    {c.participation?.solved_ids.includes(p.id) ? (
+                      <Badge value="ACCEPTED" />
+                    ) : c.participation?.last_verdicts[p.id] ? (
+                      <Badge value={c.participation.last_verdicts[p.id]} />
+                    ) : (
+                      <span className="muted">{t("continueSolving")}</span>
+                    )}
                   </div>
                   {p.difficulty && <Badge value={p.difficulty} />}
                   <ArrowRight size={18} />
@@ -352,7 +312,10 @@ export function Standings({ id }: { id: string }) {
 export function Submissions({ contestId }: { contestId?: string }) {
   const { t } = useTranslation();
   const teacher = useSession((s) => s.user?.role) !== "STUDENT";
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(() => {
+    const id = Number(new URLSearchParams(location.search).get("submission"));
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  });
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
   const [chosenContest, setChosenContest] = useState(contestId || "");

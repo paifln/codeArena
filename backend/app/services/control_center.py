@@ -12,6 +12,7 @@ from ..models import (
     AuditLog,
     SystemSetting,
     RejudgeBatch,
+    ParticipationCompletion,
 )
 from .access import participant_ids, problem_pairs
 from .judge_health import judge_status
@@ -69,8 +70,17 @@ def control_data(db, c, user):
             select(ContestPresence).where(ContestPresence.contest_id == c.id)
         )
     }
+    completions = {
+        r.identity: r.completed_at
+        for r in db.scalars(
+            select(ParticipationCompletion).where(
+                ParticipationCompletion.contest_id == c.id
+            )
+        )
+    }
     teams = identities(db, c)
     for team in teams:
+        team["completed_at"] = completions.get(team["identity"])
         team["last_seen"] = max(
             (presence.get(m["id"], 0) for m in team["members"]), default=0
         )

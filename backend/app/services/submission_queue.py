@@ -37,6 +37,11 @@ def enqueue_submission(db, req, user):
                 raise HTTPException(409, "IDEMPOTENCY_CONFLICT")
             return existing
     policy = execution_policy(db, c, practice=req.practice)
+    if user.role == "STUDENT" and not req.practice:
+        from .participation import completed
+
+        if completed(db, c, user):
+            raise HTTPException(403, "PARTICIPATION_COMPLETED")
     if req.language not in (c.languages or ["python3", "cpp20", "java17"]):
         raise HTTPException(422, "Language is disabled for this contest")
     if not policy["allowed"]:

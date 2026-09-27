@@ -1,9 +1,19 @@
 export type ExecutionReason =
+  | "PARTICIPATION_COMPLETED"
   | "CONTEST_NOT_STARTED"
   | "CONTEST_PAUSED"
   | "CONTEST_FINISHED"
   | "JUDGE_UNAVAILABLE";
 export interface ContestDetail {
+  participation?: {
+    solved: number;
+    total: number;
+    solved_ids: number[];
+    completed_at: number | null;
+    pending: number;
+    team: boolean;
+    last_verdicts: Record<number, string>;
+  };
   id: number;
   title: string;
   status: string;

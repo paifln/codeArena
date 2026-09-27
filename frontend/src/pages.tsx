@@ -1,9 +1,7 @@
-import {
-  ProblemDocuments,
-  ImportProblem,
-} from "./features/contest/ProblemDocuments";
+import { ProblemForm } from "./features/problems/ProblemForm";
+import { useList } from "./lib/useList";
+import { ImportProblem } from "./features/contest/ProblemDocuments";
 import { ContestWizard } from "./features/contest/ContestWizard";
-import { ContestOptions, defaultOptions } from "./components/ContestOptions";
 import {
   PeopleActionDialog,
   type PeopleAction,
@@ -25,8 +23,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import ReactMarkdown from "react-markdown";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { api, downloadCSV, useSession } from "./api";
 import {
   Badge,
@@ -39,18 +36,13 @@ import {
   Modal,
   useAction,
 } from "./ui";
-export function useList(path: string, enabled = true) {
-  return useQuery<any[]>({
-    queryKey: [path],
-    queryFn: () => api(path),
-    enabled,
-    refetchInterval: 10000,
-  });
-}
 export function ContestCard({ contest: c }: { contest: any }) {
   const { t, i18n } = useTranslation();
   return (
-    <Link className="contest-card" to={`/contests/${c.id}`}>
+    <Link
+      className="contest-card"
+      to={c.can_manage ? `/contests/${c.id}/control` : `/contests/${c.id}`}
+    >
       <div className="row between">
         <span className="contest-symbol">
           <Trophy size={23} />
@@ -75,7 +67,15 @@ export function ContestCard({ contest: c }: { contest: any }) {
         </span>
       </div>
       <div className="contest-card-footer">
-        <span>{t("join")}</span>
+        <span>
+          {t(
+            c.can_manage
+              ? "controlCenter"
+              : c.participation?.completed_at || c.status === "FINISHED"
+                ? "viewResults"
+                : "viewContest",
+          )}
+        </span>
         <ArrowRight size={17} />
       </div>
     </Link>
@@ -147,9 +147,12 @@ export function Dashboard() {
             <Loading />
           ) : contests.data?.length ? (
             <div className="cards-grid">
-              {contests.data.slice(0, 4).map((c) => (
-                <ContestCard key={c.id} contest={c} />
-              ))}
+              {contests.data
+                .filter((c) => c.status !== "ARCHIVED")
+                .slice(0, 4)
+                .map((c) => (
+                  <ContestCard key={c.id} contest={c} />
+                ))}
             </div>
           ) : (
             <div className="card">
@@ -172,7 +175,11 @@ export function Dashboard() {
           <div className="card activity-card">
             {rows.length ? (
               rows.slice(0, 6).map((s) => (
-                <Link key={s.id} to="/submissions" className="activity-row">
+                <Link
+                  key={s.id}
+                  to={`/submissions?submission=${s.id}`}
+                  className="activity-row"
+                >
                   <span
                     className={`activity-icon ${s.status === "ACCEPTED" ? "success" : ""}`}
                   >
@@ -194,7 +201,6 @@ export function Dashboard() {
     </>
   );
 }
-const ContestForm = ContestWizard;
 
 export function Contests() {
   const { t } = useTranslation();
@@ -205,6 +211,15 @@ export function Contests() {
   );
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const visible = (list.data || []).filter(
+    (c) =>
+      c.title.toLowerCase().includes(search.toLowerCase()) &&
+      ((filter === "all" && c.status !== "ARCHIVED") ||
+        (filter === "active" && ["RUNNING", "PAUSED"].includes(c.status)) ||
+        (filter === "upcoming" && ["DRAFT", "SCHEDULED"].includes(c.status)) ||
+        (filter === "finished" && c.status === "FINISHED") ||
+        (filter === "archived" && c.status === "ARCHIVED")),
+  );
   return (
     <>
       <Heading title={t("contests")} subtitle={t("noContestsHint")}>
@@ -217,7 +232,13 @@ export function Contests() {
       </Heading>
       <div className="toolbar">
         <div className="tabs">
-          {["all", "active", "upcoming", "finished"].map((v) => (
+          {[
+            "all",
+            "active",
+            "upcoming",
+            "finished",
+            ...(teacher ? ["archived"] : []),
+          ].map((v) => (
             <button
               className={filter === v ? "selected" : ""}
               key={v}
@@ -240,26 +261,28 @@ export function Contests() {
       <ErrorBox error={list.error} />
       {list.isPending ? (
         <Loading />
-      ) : list.data?.length ? (
+      ) : visible.length ? (
         <div className="cards-grid wide">
-          {list.data
-            .filter(
-              (c) =>
-                c.title.toLowerCase().includes(search.toLowerCase()) &&
-                (filter === "all" ||
-                  (filter === "active" &&
-                    ["RUNNING", "PAUSED"].includes(c.status)) ||
-                  (filter === "upcoming" &&
-                    ["DRAFT", "SCHEDULED"].includes(c.status)) ||
-                  (filter === "finished" && c.status === "FINISHED")),
-            )
-            .map((c) => (
-              <ContestCard key={c.id} contest={c} />
-            ))}
+          {visible.map((c) => (
+            <ContestCard key={c.id} contest={c} />
+          ))}
         </div>
       ) : (
         <div className="card">
-          <Empty title={t("noContests")} hint={t("noContestsHint")} />
+          <Empty
+            title={t(list.data?.length ? "noMatches" : "noContests")}
+            hint={list.data?.length ? undefined : t("noContestsHint")}
+          >
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSearch("");
+                setFilter("all");
+              }}
+            >
+              {t("resetFilters")}
+            </Button>
+          </Empty>
         </div>
       )}
       <Modal
@@ -267,308 +290,9 @@ export function Contests() {
         onClose={() => setCreate(false)}
         title={t("newContest")}
       >
-        <ContestForm close={() => setCreate(false)} />
+        <ContestWizard close={() => setCreate(false)} />
       </Modal>
     </>
-  );
-}
-function ProblemForm({
-  close,
-  existing,
-}: {
-  close: () => void;
-  existing?: any;
-}) {
-  const { t } = useTranslation();
-  const a = useAction();
-  const q = useQueryClient();
-  const [tests, setTests] = useState<any[]>(
-    existing?.tests || [
-      { input_data: "", expected: "", is_sample: true },
-      { input_data: "", expected: "", is_sample: false },
-    ],
-  );
-  const [desc, setDesc] = useState(existing?.description || "");
-  const [preview, setPreview] = useState(false);
-  const [rejudgeMode, setRejudgeMode] = useState("none");
-  const usage = useQuery({
-    queryKey: ["problem-usage", existing?.id],
-    queryFn: () => api(`/problems/${existing.id}/usage`),
-    enabled: !!existing?.id,
-  });
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        const f = new FormData(e.currentTarget);
-        a.execute(async () => {
-          await api(
-            existing?.id ? `/problems/${existing.id}` : "/problems",
-            {
-              title: f.get("title"),
-              description: desc,
-              editorial: f.get("editorial"),
-              input_fmt: f.get("input"),
-              output_fmt: f.get("output"),
-              difficulty: f.get("difficulty"),
-              time_limit: Number(f.get("time")),
-              mem_limit: Number(f.get("memory")),
-              tags: String(f.get("tags"))
-                .split(",")
-                .map((v) => v.trim())
-                .filter(Boolean),
-              tests,
-            },
-            existing?.id ? "PATCH" : "POST",
-          );
-          if (existing?.id && rejudgeMode !== "none")
-            for (const contest of usage.data?.contests || [])
-              await api(`/contests/${contest.id}/rejudge`, {
-                problem_id: existing.id,
-                affected_only: rejudgeMode === "affected",
-              });
-          q.invalidateQueries({ queryKey: ["/problems"] });
-          close();
-        });
-      }}
-    >
-      {usage.data?.count > 0 && (
-        <div className="notice warning">
-          <p>{t("existingSubmissions", { count: usage.data.count })}</p>
-          <select
-            aria-label={t("rejudge")}
-            value={rejudgeMode}
-            onChange={(e) => setRejudgeMode(e.target.value)}
-          >
-            <option value="none">{t("noRejudge")}</option>
-            <option value="affected">{t("rejudgeAffected")}</option>
-            <option value="all">{t("rejudgeProblem")}</option>
-          </select>
-        </div>
-      )}
-      <Field label={t("title")}>
-        <input
-          name="title"
-          defaultValue={existing?.title}
-          required
-          maxLength={180}
-        />
-      </Field>
-      <div className="row between">
-        <label>{t("description")}</label>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => setPreview(!preview)}
-        >
-          {t(preview ? "edit" : "preview")}
-        </Button>
-      </div>
-      {preview ? (
-        <div className="markdown preview">
-          <ReactMarkdown>{desc}</ReactMarkdown>
-        </div>
-      ) : (
-        <textarea
-          value={desc}
-          onChange={(e) => setDesc(e.target.value)}
-          rows={7}
-          minLength={10}
-          required
-        />
-      )}
-      <div className="form-grid">
-        <Field label={t("input")}>
-          <textarea name="input" defaultValue={existing?.input_fmt} rows={3} />
-        </Field>
-        <Field label={t("output")}>
-          <textarea
-            name="output"
-            defaultValue={existing?.output_fmt}
-            rows={3}
-          />
-        </Field>
-      </div>
-      {existing?.review_required && (
-        <p className="notice warning">{t("importReview")}</p>
-      )}
-      {existing?.id ? (
-        <ProblemDocuments
-          key={existing.id}
-          problemId={existing.id}
-          documents={existing.documents}
-          editable
-        />
-      ) : (
-        <p className="muted">{t("documentsSave")}</p>
-      )}
-      <Field label={t("editorial")}>
-        <textarea
-          name="editorial"
-          rows={5}
-          maxLength={30000}
-          defaultValue={existing?.editorial || ""}
-        />
-      </Field>
-      <p className="muted">{t("editorialHint")}</p>
-      <div className="form-grid three">
-        <Field label={t("difficulty")}>
-          <select
-            name="difficulty"
-            defaultValue={existing?.difficulty || "EASY"}
-          >
-            {["EASY", "MEDIUM", "HARD"].map((x) => (
-              <option value={x} key={x}>
-                {t(x)}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t("timeLimit")}>
-          <input
-            name="time"
-            type="number"
-            min="0.1"
-            max="10"
-            step="0.1"
-            defaultValue={existing?.time_limit || 2}
-          />
-        </Field>
-        <Field label={t("memoryLimit")}>
-          <input
-            name="memory"
-            type="number"
-            min="32"
-            max="512"
-            defaultValue={existing?.mem_limit || 128}
-          />
-        </Field>
-      </div>
-      <Field label={t("tags")}>
-        <input name="tags" defaultValue={existing?.tags?.join(", ")} />
-      </Field>
-      <div className="section-heading">
-        <h3>{t("tests")}</h3>
-        <label className="button ghost file-upload">
-          {t("importTests")}
-          <input
-            type="file"
-            accept="application/json,.json"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (file)
-                try {
-                  const rows = JSON.parse(await file.text());
-                  if (
-                    !Array.isArray(rows) ||
-                    !rows.every(
-                      (x) =>
-                        typeof x.input_data === "string" &&
-                        typeof x.expected === "string" &&
-                        typeof x.is_sample === "boolean",
-                    )
-                  )
-                    throw new Error(t("error"));
-                  setTests(rows);
-                } catch (err) {
-                  a.setError(err);
-                }
-            }}
-          />
-        </label>
-      </div>
-      <p className="muted">{t("testHint")}</p>
-      {tests.map((test, i) => (
-        <div className="test-editor" key={i}>
-          <div className="row between">
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={test.is_sample}
-                onChange={(e) =>
-                  setTests(
-                    tests.map((x, j) =>
-                      i === j ? { ...x, is_sample: e.target.checked } : x,
-                    ),
-                  )
-                }
-              />
-              {t(test.is_sample ? "sample" : "hidden")} #{i + 1}
-            </label>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label={t("remove")}
-              onClick={() => setTests(tests.filter((_, j) => j !== i))}
-            >
-              <Trash2 size={16} />
-            </button>
-          </div>
-          <Field label={t("weight")}>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={test.weight ?? 1}
-              onChange={(e) =>
-                setTests(
-                  tests.map((x, j) =>
-                    i === j ? { ...x, weight: Number(e.target.value) } : x,
-                  ),
-                )
-              }
-            />
-          </Field>
-          <div className="form-grid">
-            {["input_data", "expected"].map((key) => (
-              <Field
-                key={key}
-                label={t(key === "input_data" ? "input" : "output")}
-              >
-                <textarea
-                  className="mono"
-                  rows={3}
-                  value={test[key]}
-                  onChange={(e) =>
-                    setTests(
-                      tests.map((x, j) =>
-                        i === j ? { ...x, [key]: e.target.value } : x,
-                      ),
-                    )
-                  }
-                />
-              </Field>
-            ))}
-          </div>
-        </div>
-      ))}
-      <Button
-        type="button"
-        variant="secondary"
-        onClick={() =>
-          setTests([
-            ...tests,
-            { input_data: "", expected: "", is_sample: false },
-          ])
-        }
-      >
-        <Plus size={15} />
-        {t("addTest")}
-      </Button>
-      <ErrorBox error={a.error} />
-      <div className="form-actions">
-        <Button type="button" variant="secondary" onClick={close}>
-          {t("cancel")}
-        </Button>
-        <Button
-          disabled={
-            a.busy || !tests.some((test) => test.is_sample) || desc.length < 10
-          }
-        >
-          {t("save")}
-        </Button>
-      </div>
-    </form>
   );
 }
 export function Problems() {

@@ -7,7 +7,8 @@ from ..models import (
     ContestParticipant,
     ContestProblem,
     GroupMember,
-    Problem, TeamMember,
+    Problem,
+    TeamMember,
 )
 
 
@@ -36,7 +37,9 @@ def participant_ids(db, c):
     direct.update(
         db.scalars(select(GroupMember.user_id).where(GroupMember.group_id.in_(groups)))
     )
-    direct.update(db.scalars(select(TeamMember.user_id).where(TeamMember.contest_id == c.id)))
+    direct.update(
+        db.scalars(select(TeamMember.user_id).where(TeamMember.contest_id == c.id))
+    )
     return direct
 
 
@@ -66,4 +69,23 @@ def problem_pairs(db, c):
 
 
 def team_id_for(db, cid, uid):
-    return db.scalar(select(TeamMember.team_id).where(TeamMember.contest_id == cid, TeamMember.user_id == uid))
+    return db.scalar(
+        select(TeamMember.team_id).where(
+            TeamMember.contest_id == cid, TeamMember.user_id == uid
+        )
+    )
+
+
+def conversation_user_ids(db, c, user):
+    team = team_id_for(db, c.id, user.id) if c.mode == "TEAM" else None
+    return (
+        list(
+            db.scalars(
+                select(TeamMember.user_id).where(
+                    TeamMember.contest_id == c.id, TeamMember.team_id == team
+                )
+            )
+        )
+        if team
+        else [user.id]
+    )

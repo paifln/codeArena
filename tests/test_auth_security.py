@@ -72,7 +72,7 @@ def test_login_window_persists_failed_attempts(arena):
         assert row.count == 5 and row.reset_at-time.time() > 800
 
 
-def test_default_ip_limit_cannot_be_bypassed_by_changing_routes(arena):
+def test_default_account_limit_cannot_be_bypassed_by_changing_routes(arena):
     clients, _, _ = arena
     from app.middleware.limits import limiter
     limiter.reset()

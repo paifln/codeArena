@@ -1,3 +1,4 @@
+import { ParticipationPanel } from "../contest/ParticipationPanel";
 import { languages } from "../../languages";
 import { ProblemDocuments } from "../contest/ProblemDocuments";
 import { useQuery } from "@tanstack/react-query";
@@ -157,6 +158,7 @@ function SolverWorkspace({
         </Link>
         {contest.data && <Timer contest={contest.data} />}
       </div>
+      {contest.data && <ParticipationPanel contest={contest.data} />}
       {practice && <p className="notice success">{t("practiceHint")}</p>}
       <div className="solver-problems">
         {contest.data?.problems?.map((pr: any, i: number) => (
@@ -166,6 +168,9 @@ function SolverWorkspace({
             to={`/contests/${id}/problems/${pr.id}`}
           >
             {pr.letter || String.fromCharCode(65 + i)} <span>{pr.title}</span>
+            {contest.data?.participation?.solved_ids.includes(pr.id)
+              ? " ?"
+              : ""}
           </Link>
         ))}
       </div>

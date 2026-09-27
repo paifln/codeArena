@@ -12,7 +12,7 @@ Migration 0004 invalidates old opaque sessions, preserving users/passwords/resul
 
 - SQLAlchemy uses bound parameters. Ownership/membership checks and role dependencies protect objects, submissions, administration and backup downloads.
 - State changes require a CSRF header bound to the session. Supplied Origin must match this site or an explicitly allowed origin; cookies use SameSite=Strict.
-- SlowAPI limits aggregate application traffic to 100 requests/minute/IP and authentication mutations to 5/minute/IP. Health probes are exempt. Login additionally has a persistent SQLite limit of 5 attempts/15 minutes/IP, including failed attempts.
+- SlowAPI limits aggregate application traffic to 100 requests/minute per signed account (anonymous/invalid-token traffic remains per IP) and authentication mutations to 5/minute/IP. Health probes are exempt. Login additionally has a persistent SQLite limit of 5 attempts/15 minutes/IP, including failed attempts.
 - Do not expose a proxy that replaces every client address with one IP. Configure Uvicorn's trusted proxy addresses narrowly; never trust arbitrary forwarded headers. A NAT sharing one IP shares the quota.
 - Streamed request bodies are limited to 10 MiB, independently of Content-Length. Source is capped at 64 KiB of UTF-8 in API and judge. Input models forbid extra fields and use strict typing; ISO datetimes and UUID strings have explicit JSON adapters.
 - CSP, HSTS, X-Frame-Options, nosniff, Referrer-Policy and Permissions-Policy are applied, including rejected requests. CSP permits local Monaco workers/styles; raw Markdown HTML is not enabled. HSTS takes effect over HTTPS.

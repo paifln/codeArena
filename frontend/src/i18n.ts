@@ -1,3 +1,4 @@
+import {usabilityTranslations} from "./usabilityTranslations";
 import { platformTranslations } from "./platformTranslations";
 import { teachingTranslations } from "./teachingTranslations";
 import { contestTranslations } from "./contestTranslations";
@@ -6,6 +7,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 const entries: Record<string, [string, string, string]> = {
   ...platformTranslations,
+  ...usabilityTranslations,
   ...peopleTranslations,
   ...teachingTranslations,
   ...contestTranslations,

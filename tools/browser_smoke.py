@@ -38,6 +38,7 @@ def run():
             TestCase,
             Contest,
             ContestProblem,
+            ContestParticipant,
             Team,
             TeamMember,
             Submission,
@@ -154,6 +155,38 @@ def run():
                 SystemSetting(
                     key="judge_heartbeat",
                     value={"time": time.time(), "available": True, "slots": 2},
+                )
+            )
+            active = Contest(
+                title="Finish participation check",
+                author_id=admin.id,
+                start_time=now - 60,
+                end_time=now + 3600,
+                status="RUNNING",
+            )
+            db.add(active)
+            db.flush()
+            active_id = active.id
+            db.add(ContestParticipant(contest_id=active.id, user_id=user.id))
+            db.add(
+                ContestProblem(
+                    contest_id=active.id, problem_id=problems[0].id, ordinal=0
+                )
+            )
+            db.add(
+                Submission(
+                    user_id=user.id,
+                    contest_id=active.id,
+                    problem_id=problems[0].id,
+                    source="print(3)",
+                    language="python3",
+                    kind="SUBMIT",
+                    status="ACCEPTED",
+                    score=100,
+                    created_at=now - 20,
+                    finished_at=now - 18,
+                    contest_elapsed=40,
+                    problem_snapshot={"version": 1, "tests": []},
                 )
             )
             db.commit()
@@ -300,6 +333,56 @@ def run():
                     display.screenshot(
                         path=str(ARTIFACTS / "public-puzzles.png"), full_page=True
                     )
+                    participant = browser.new_context(
+                        viewport={"width": 390, "height": 844}
+                    )
+                    participant.add_init_script(
+                        "localStorage.setItem('ca_language','en')"
+                    )
+                    student = participant.new_page()
+                    student.on("pageerror", lambda error: errors.append(str(error)))
+                    student.goto(base)
+                    student.locator("input[name=username]").fill("team5")
+                    student.locator("input[name=password]").fill(password)
+                    student.locator(".auth-form form button[type=submit]").click()
+                    student.locator(".sidebar").wait_for(state="attached")
+                    student.goto(base + f"/contests/{active_id}")
+                    student.get_by_role(
+                        "heading", name="All problems solved!", exact=True
+                    ).wait_for()
+                    student.screenshot(
+                        path=str(ARTIFACTS / "student-progress-mobile.png"),
+                        full_page=True,
+                    )
+                    student.get_by_role(
+                        "button", name="Finish participation", exact=True
+                    ).click()
+                    student.get_by_role("dialog").get_by_role(
+                        "button", name="Finish participation", exact=True
+                    ).click()
+                    student.get_by_role(
+                        "heading", name="Participation completed", exact=True
+                    ).wait_for()
+                    student.screenshot(
+                        path=str(ARTIFACTS / "student-completed-mobile.png"),
+                        full_page=True,
+                    )
+                    page.goto(base + f"/contests/{active_id}/control")
+                    page.get_by_role("button", name="Teams", exact=True).click()
+                    page.get_by_role(
+                        "button", name="Reopen participation", exact=True
+                    ).wait_for()
+                    page.once("dialog", lambda dialog: dialog.accept())
+                    page.get_by_role(
+                        "button", name="Reopen participation", exact=True
+                    ).click()
+                    page.get_by_role(
+                        "button", name="Reopen participation", exact=True
+                    ).wait_for(state="detached")
+                    student.reload()
+                    student.get_by_role(
+                        "button", name="Finish participation", exact=True
+                    ).wait_for()
                     assert not errors, errors
                     print(
                         json.dumps(
@@ -307,7 +390,7 @@ def run():
                                 "browser": "Microsoft Edge",
                                 "isolated": True,
                                 "page_errors": errors,
-                                "screenshots": 9,
+                                "screenshots": 11,
                             }
                         )
                     )

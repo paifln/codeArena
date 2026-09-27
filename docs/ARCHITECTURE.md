@@ -104,3 +104,23 @@ components. Existing authenticated WebSockets invalidate query caches; public
 WebSockets expose only a visible-standings revision. HTTP polling is a fallback.
 Public display is opt-in; mobile delivery retains organizer/admin permissions.
 The SQLite/single-API/single-worker deployment boundary remains unchanged.
+
+## Version 3.4 participation and workflow
+
+Migration 0007 stores completion by contest and participant/team identity. Queue
+admission and completion use the same SQLite write serialization: a completion
+cannot race a new submission. Outstanding checks prevent completion. An organizer
+can reopen participation while the contest is running or paused. Completion is
+independent of scoring, freeze and post-contest practice.
+
+Private progress is computed from that identity's official submissions and is never
+used as the public scoreboard. WebSocket snapshots include completion state to
+invalidate teammates' views. Team members also share their private clarifications.
+The reusable participation panel appears in the contest and solver; the problem
+editor and list hook are extracted from the general pages module.
+
+The organizer's main flow enters the control center directly. Infrastructure slot
+counts and raw event identifiers are not shown in the event UI. Operational backup
+and availability controls remain administrator-only. Production source maps are
+disabled; browser-delivered JavaScript remains inspectable by design. Backend source,
+credentials and hidden tests are not served as static files.

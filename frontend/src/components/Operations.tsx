@@ -43,7 +43,7 @@ export function Operations() {
             {data.backup?.time && (
               <p>{new Date(data.backup.time * 1000).toLocaleString()}</p>
             )}
-            <small className="muted">{data.backup?.file}</small>
+
             {data.backup?.verified && data.backup?.file && (
               <p><a href={`/api/v1/operations/backups/${encodeURIComponent(data.backup.file)}`} download>
                 {t("downloadBackup")}

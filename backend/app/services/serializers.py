@@ -11,6 +11,12 @@ def contest_public(db, c, u):
     state = contest_status(c)
     reveal = manager(c, u) or state in ("RUNNING", "PAUSED", "FINISHED")
     pairs = problem_pairs(db, c)
+    from .participation import progress
+
+    participation = progress(db, c, u) if u.role == "STUDENT" else None
+    execution = execution_policy(db, c)
+    if participation and participation["completed_at"]:
+        execution = {"allowed": False, "reason": "PARTICIPATION_COMPLETED"}
     return {
         "id": c.id,
         "languages": c.languages,
@@ -39,7 +45,8 @@ def contest_public(db, c, u):
         "description": c.description,
         "rules": c.rules,
         "status": state,
-        "execution": execution_policy(db, c),
+        "execution": execution,
+        "participation": participation,
         "can_manage": manager(c, u),
         "start_time": iso(c.start_time),
         "end_time": iso(c.end_time),

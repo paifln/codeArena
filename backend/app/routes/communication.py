@@ -1,3 +1,4 @@
+from ..services.access import conversation_user_ids
 import csv
 import io
 import time
@@ -147,7 +148,10 @@ def questions(cid: int, user=Depends(current_user), db: DBSession = Depends(get_
     q = select(Clarification).where(Clarification.contest_id == cid)
     if not manager(c, user):
         q = q.where(
-            or_(Clarification.user_id == user.id, Clarification.is_public == True)
+            or_(
+                Clarification.user_id.in_(conversation_user_ids(db, c, user)),
+                Clarification.is_public == True,
+            )
         )
     return [
         {

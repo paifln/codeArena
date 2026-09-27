@@ -250,3 +250,11 @@ class ContestLanguages(Input):
     languages: list[
         Literal["python3", "cpp20", "java17", "javascript", "go", "csharp"]
     ] = Field(min_length=1, max_length=6)
+
+
+class ContestDetails(Input):
+    title: str = Field(min_length=2, max_length=200)
+    description: str = Field(default="", max_length=10000)
+    rules: str = Field(default="", max_length=10000)
+    start_time: datetime | None = None
+    end_time: datetime | None = None

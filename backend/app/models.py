@@ -186,6 +186,14 @@ class ContestParticipant(Base):
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
 
 
+class ParticipationCompletion(Base):
+    __tablename__ = "participation_completions"
+    contest_id = Column(Integer, ForeignKey("contests.id"), primary_key=True)
+    identity = Column(String(40), primary_key=True)
+    completed_at = Column(Float, nullable=False)
+    completed_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+
 class Submission(Timestamps, Base):
     __tablename__ = "submissions"
     id = Column(Integer, primary_key=True)
